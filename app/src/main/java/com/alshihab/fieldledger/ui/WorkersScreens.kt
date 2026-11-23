@@ -1,6 +1,13 @@
 package com.alshihab.fieldledger.ui
 
+import android.content.Intent
+import android.provider.ContactsContract
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material3.OutlinedButton
+import com.alshihab.fieldledger.AppLock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -121,6 +128,30 @@ fun WorkerFormScreen(nav: NavController, id: Long) {
     var active by rememberSaveable { mutableStateOf(true) }
     var nameError by remember { mutableStateOf(false) }
 
+    val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        val uri = res.data?.data ?: return@rememberLauncherForActivityResult
+        try {
+            ctx.contentResolver.query(
+                uri,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER
+                ),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val n = c.getString(0).orEmpty()
+                    val ph = c.getString(1).orEmpty().replace(" ", "").replace("-", "")
+                    if (name.isBlank()) name = n
+                    phone = ph
+                    nameError = false
+                }
+            }
+        } catch (e: Exception) {
+            Toast.makeText(ctx, "تعذر قراءة جهة الاتصال", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     LaunchedEffect(id) {
         if (id != 0L && !loaded) {
             repo.dao.worker(id)?.let { w ->
@@ -141,16 +172,25 @@ fun WorkerFormScreen(nav: NavController, id: Long) {
                 .padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            OutlinedButton(
+                onClick = {
+                    AppLock.allowExternal()
+                    contactPicker.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.Contacts, contentDescription = null)
+                Text("  اختيار من جهات الاتصال")
+            }
             SectionCard {
                 Field("الاسم الكامل *", name, { name = it; nameError = false }, isError = nameError,
                     supporting = if (nameError) "الاسم مطلوب" else null)
                 Field("المهنة / الصفة", profession, { profession = it })
                 Field("رقم الهاتف", phone, { phone = it }, keyboard = KeyboardType.Phone)
-                Field("رقم الكرت", cardNo, { cardNo = it })
                 Field("ملاحظات", notes, { notes = it }, singleLine = false)
             }
             Text(
-                "الأجر ونوع العمل (يومية أو مقاولة) يُحددان عند إضافة العامل إلى مشروع، لأنهما قد يختلفان من مشروع لآخر.",
+                "الأجر ونوع العمل (يومية أو مقاولة) ورقم الكرت تُحدد عند إضافة العامل إلى مشروع، ورقم الكرت يُعطى تلقائياً بالتسلسل داخل كل مشروع.",
                 style = MaterialTheme.typography.bodySmall
             )
             if (id != 0L) SectionCard {

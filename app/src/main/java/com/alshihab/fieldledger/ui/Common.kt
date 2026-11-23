@@ -87,6 +87,13 @@ private val colors = lightColorScheme(
 fun AppRoot(activity: FragmentActivity) {
     MaterialTheme(colorScheme = colors) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                while (true) {
+                    kotlinx.coroutines.delay(10_000)
+                    AppLock.checkIdle(ctx)
+                }
+            }
             Box(Modifier.fillMaxSize()) {
                 AppNav()
                 if (AppLock.locked) LockScreen(activity)
@@ -304,3 +311,62 @@ fun currencyLabel(c: CurrencyEntity) = "${c.name} (${c.code})"
 val OUT_CATEGORIES = listOf("بترول", "ديزل", "تغذية", "صيانة", "مواصلات واتصالات", "تسهيلات", "مصاريف أخرى")
 val IN_CATEGORIES = listOf("عهدة من المكتب", "تحويل", "مقبوضات أخرى")
 val DOC_TYPES = listOf("سند قبض", "سند صرف", "فاتورة", "إشعار تحويل", "بدون مستند", "أخرى")
+
+/** Shows 1250000.5 as 1,250,000.5 while the field keeps the raw number. */
+object ThousandsTransformation : androidx.compose.ui.text.input.VisualTransformation {
+    override fun filter(text: androidx.compose.ui.text.AnnotatedString): androidx.compose.ui.text.input.TransformedText {
+        val raw = text.text
+        val intPart = raw.substringBefore('.')
+        val rest = raw.substring(intPart.length)
+        val len = intPart.length
+        val sb = StringBuilder()
+        val o2t = IntArray(raw.length + 1)
+        var t = 0
+        for (i in 0 until len) {
+            if (i > 0 && (len - i) % 3 == 0) { sb.append(','); t++ }
+            o2t[i] = t
+            sb.append(intPart[i]); t++
+        }
+        o2t[len] = t
+        for (j in 1..rest.length) o2t[len + j] = t + j
+        sb.append(rest)
+        val out = sb.toString()
+        val mapping = object : androidx.compose.ui.text.input.OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int = o2t[offset.coerceIn(0, raw.length)]
+            override fun transformedToOriginal(offset: Int): Int =
+                out.substring(0, offset.coerceIn(0, out.length)).count { it != ',' }
+        }
+        return androidx.compose.ui.text.input.TransformedText(androidx.compose.ui.text.AnnotatedString(out), mapping)
+    }
+}
+
+/** Amount input: thousands separators while typing, Arabic digits accepted, amount in words below. */
+@Composable
+fun MoneyField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    currencyCode: String,
+    currencies: List<CurrencyEntity>,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    enabled: Boolean = true,
+    hint: String? = null,
+    showWords: Boolean = true
+) {
+    val minor = Money.parse(value) ?: 0L
+    val cName = currencies.firstOrNull { it.code == currencyCode }?.name?.substringBefore(" (") ?: currencyCode
+    val words = if (showWords && minor > 0) com.alshihab.fieldledger.util.Tafqeet.amount(minor, cName) else null
+    val support = listOfNotNull(hint, words).joinToString("\n").ifBlank { null }
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(com.alshihab.fieldledger.util.cleanAmountInput(it)) },
+        label = { Text(label) },
+        modifier = modifier,
+        enabled = enabled,
+        singleLine = true,
+        visualTransformation = ThousandsTransformation,
+        supportingText = support?.let { s -> { Text(s, style = MaterialTheme.typography.bodySmall) } },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        textStyle = MaterialTheme.typography.titleMedium.copy(textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)
+    )
+}

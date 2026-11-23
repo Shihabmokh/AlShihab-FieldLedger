@@ -65,12 +65,13 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
             if (dao.assignmentExists(a.projectId, a.workerId) > 0) {
                 throw DuplicateException("هذا العامل مضاف للمشروع مسبقاً")
             }
-            val id = dao.insertAssignment(a.copy(createdAt = now()))
-            audit("إنشاء", "اتفاق عامل", id, "مشروع ${a.projectId} / عامل ${a.workerId}")
+            val card = (dao.maxCardNo(a.projectId) ?: 0) + 1
+            val id = dao.insertAssignment(a.copy(createdAt = now(), cardNo = card))
+            audit("إنشاء", "اتفاق عامل", id, "مشروع ${a.projectId} / عامل ${a.workerId} / كرت $card")
             id
         } else {
             val old = dao.assignment(a.id)
-            dao.updateAssignment(a.copy(createdAt = old?.createdAt ?: a.createdAt))
+            dao.updateAssignment(a.copy(createdAt = old?.createdAt ?: a.createdAt, cardNo = old?.cardNo ?: a.cardNo))
             audit("تعديل", "اتفاق عامل", a.id, diff(old, a))
             a.id
         }
@@ -88,18 +89,31 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
 
     // ---------- attendance / withdrawals (3F) ----------
     suspend fun saveAttendance(projectId: Long, date: String, rows: List<Attendance>) = db.withTransaction {
+        attendanceInner(projectId, date, rows)
+    }
+
+    /** One transaction for the whole day: workers sheet (3F) and cash sheet (A2F/B2F). Null = section not saved. */
+    suspend fun saveDay(projectId: Long, date: String, attendance: List<Attendance>?, cash: List<CashEntry>?) =
+        db.withTransaction {
+            if (attendance != null) attendanceInner(projectId, date, attendance)
+            if (cash != null) cashDayInner(projectId, date, cash)
+        }
+
+    private suspend fun attendanceInner(projectId: Long, date: String, rows: List<Attendance>) {
         val existingSheet = dao.findSheet(projectId, Forms.WORKERS, date)
         if (!sheetEditable(existingSheet)) throw LockedException()
+        val existing = existingSheet?.let { s -> dao.attendanceForSheet(s.id).associateBy { it.assignmentId } } ?: emptyMap()
+        val toWrite = rows.filter { r ->
+            existing.containsKey(r.assignmentId) ||
+                !(r.withdrawn == 0L && r.due == 0L && r.workNote.isBlank() && (r.status == Status.ABSENT || r.status == Status.CONTRACT))
+        }
+        if (toWrite.isEmpty()) return
         val sheet = existingSheet ?: getOrCreateSheet(projectId, Forms.WORKERS, date)
-        val existing = dao.attendanceForSheet(sheet.id).associateBy { it.assignmentId }
         var changes = 0
-        for (r in rows) {
+        for (r in toWrite) {
             val row = r.copy(sheetId = sheet.id, projectId = projectId, date = date, updatedAt = now())
             val old = existing[r.assignmentId]
             if (old == null) {
-                // skip empty rows (absent, nothing withdrawn, no note)
-                if (row.status == Status.ABSENT && row.withdrawn == 0L && row.due == 0L && row.workNote.isBlank()) continue
-                if (row.status == Status.CONTRACT && row.withdrawn == 0L && row.workNote.isBlank()) continue
                 dao.insertAttendance(row.copy(id = 0))
                 changes++
             } else {
@@ -117,6 +131,28 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
             }
         }
         if (changes > 0) audit("حفظ", "كشف 3F", sheet.id, "$date - $changes سطر")
+    }
+
+    private suspend fun cashDayInner(projectId: Long, date: String, entries: List<CashEntry>) {
+        val existingSheet = dao.findSheet(projectId, Forms.CASH, date)
+        if (!sheetEditable(existingSheet)) throw LockedException()
+        val toWrite = entries.filter { it.id != 0L || (!it.voided && it.amount > 0) }
+        if (toWrite.isEmpty()) return
+        val sheet = existingSheet ?: getOrCreateSheet(projectId, Forms.CASH, date)
+        for (e in toWrite) {
+            if (e.id == 0L) {
+                val id = dao.insertCash(e.copy(sheetId = sheet.id, projectId = projectId, date = date, createdAt = now()))
+                audit("إنشاء", "قيد صندوق", id, describe(e))
+            } else {
+                val old = dao.cashEntry(e.id) ?: continue
+                val updated = e.copy(sheetId = old.sheetId, projectId = old.projectId, date = old.date, createdAt = old.createdAt)
+                if (updated != old) {
+                    dao.updateCash(updated)
+                    if (updated.voided && !old.voided) audit("إلغاء", "قيد صندوق", e.id, describe(old))
+                    else audit("تعديل", "قيد صندوق", e.id, "${describe(old)} ← ${describe(updated)}")
+                }
+            }
+        }
     }
 
     // ---------- cash box (A2F / B2F) ----------

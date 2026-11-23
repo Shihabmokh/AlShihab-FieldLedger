@@ -86,7 +86,7 @@ fun LockScreen(activity: FragmentActivity) {
     val bioOn = remember { !setupMode && PinManager.biometricEnabled(ctx) && Biometric.available(ctx) }
 
     LaunchedEffect(Unit) {
-        if (bioOn) Biometric.prompt(activity) { AppLock.locked = false }
+        if (bioOn) Biometric.prompt(activity) { AppLock.unlock() }
     }
 
     val title = when {
@@ -110,7 +110,7 @@ fun LockScreen(activity: FragmentActivity) {
                 scope.launch {
                     withContext(Dispatchers.Default) { PinManager.setPin(ctx, chosen) }
                     busy = false
-                    AppLock.locked = false
+                    AppLock.unlock()
                 }
             } else {
                 firstPin = null; pin = ""; error = "الرمزان غير متطابقين، حاول مرة أخرى"
@@ -128,7 +128,7 @@ fun LockScreen(activity: FragmentActivity) {
                 val ok = withContext(Dispatchers.Default) { PinManager.verify(ctx, entered) }
                 busy = false
                 if (ok) {
-                    AppLock.locked = false
+                    AppLock.unlock()
                 } else {
                     pin = ""
                     val w = PinManager.lockoutRemaining(ctx)
@@ -199,7 +199,7 @@ fun LockScreen(activity: FragmentActivity) {
             }
             if (bioOn) {
                 Spacer(Modifier.height(12.dp))
-                TextButton(onClick = { Biometric.prompt(activity) { AppLock.locked = false } }) {
+                TextButton(onClick = { Biometric.prompt(activity) { AppLock.unlock() } }) {
                     Icon(Icons.Filled.Fingerprint, contentDescription = null)
                     Text("  الدخول بالبصمة")
                 }

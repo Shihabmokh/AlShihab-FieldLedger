@@ -1,6 +1,10 @@
 package com.alshihab.fieldledger.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
+import androidx.compose.material.icons.filled.Call
+import com.alshihab.fieldledger.AppLock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -145,12 +149,12 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
                     { currencyLabel(it) }, { currency = it.code }
                 )
                 if (payType == PayType.DAILY) {
-                    Field("الأجر اليومي *", wage, { wage = it }, keyboard = KeyboardType.Decimal)
-                    Field("سعر الساعة الإضافية", otRate, { otRate = it }, keyboard = KeyboardType.Decimal)
+                    MoneyField("الأجر اليومي *", wage, { wage = it }, currency, currencies)
+                    MoneyField("سعر الساعة الإضافية", otRate, { otRate = it }, currency, currencies)
                     Field("ساعات العمل الأساسية في اليوم", baseHours, { baseHours = it }, keyboard = KeyboardType.Number)
                 } else {
                     Field("وصف العمل المتفق عليه", contractDesc, { contractDesc = it }, singleLine = false)
-                    Field("المبلغ المتفق عليه *", contractAmount, { contractAmount = it }, keyboard = KeyboardType.Decimal)
+                    MoneyField("المبلغ المتفق عليه *", contractAmount, { contractAmount = it }, currency, currencies)
                     Field("نسبة الإنجاز % (اختياري)", progress, { progress = it }, keyboard = KeyboardType.Number)
                 }
             }
@@ -209,17 +213,17 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
 // =====================================================================
 // 3F - daily attendance & withdrawals
 // =====================================================================
-private data class RowState(
+internal data class RowState(
     val status: String,
     val ot: String = "",
     val withdrawn: String = "",
     val note: String = ""
 )
 
-private fun defaultRow(a: Assignment) =
+internal fun defaultRow(a: Assignment) =
     RowState(if (a.payType == PayType.CONTRACT) Status.CONTRACT else Status.ABSENT)
 
-private fun computeDue(a: Assignment, r: RowState): Long {
+internal fun computeDue(a: Assignment, r: RowState): Long {
     if (a.payType == PayType.CONTRACT) return 0L
     val base = when (r.status) {
         Status.PRESENT -> a.dailyWage
@@ -230,190 +234,12 @@ private fun computeDue(a: Assignment, r: RowState): Long {
     return base + Math.round(ot * a.overtimeRate)
 }
 
-@Composable
-fun AttendanceScreen(nav: NavController, projectId: Long, initialDate: String) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val repo = Graph.repo
-    var date by rememberSaveable { mutableStateOf(initialDate.ifBlank { Dates.today() }) }
-    val project by rememberFlow<Project?>(projectId, initial = null) { repo.dao.projectFlow(projectId) }
-    val currencies by rememberFlow(Unit, initial = emptyList<CurrencyEntity>()) { repo.dao.currencies() }
-    val assignments by rememberFlow(projectId, initial = emptyList<AssignmentWithWorker>()) { repo.dao.assignments(projectId) }
-    val sheet by rememberFlow<Sheet?>(projectId, date, initial = null) { repo.dao.sheetFlow(projectId, Forms.WORKERS, date) }
-    val rows = remember { mutableStateMapOf<Long, RowState>() }
-    var savedIds by remember { mutableStateOf(setOf<Long>()) }
-    var loadedFor by remember { mutableStateOf<String?>(null) }
-    var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(date) {
-        loadedFor = null
-        val s = repo.dao.findSheet(projectId, Forms.WORKERS, date)
-        val existing = if (s != null) repo.dao.attendanceForSheet(s.id) else emptyList()
-        rows.clear()
-        existing.forEach {
-            rows[it.assignmentId] = RowState(
-                status = it.status,
-                ot = if (it.overtimeHours == 0.0) "" else fmtNum(it.overtimeHours),
-                withdrawn = Money.toInput(it.withdrawn),
-                note = it.workNote
-            )
-        }
-        savedIds = existing.map { it.assignmentId }.toSet()
-        loadedFor = date
-    }
-
-    val editable = remember(sheet, loadedFor) { repo.sheetEditable(sheet) } && loadedFor == date
-    val shown = assignments.filter { it.a.active || it.a.id in savedIds }
-    fun rowOf(a: Assignment) = rows[a.id] ?: defaultRow(a)
-
-    // totals per currency
-    val dueTotals = mutableMapOf<String, Long>()
-    val wTotals = mutableMapOf<String, Long>()
-    var present = 0.0
-    shown.forEach { aw ->
-        val r = rowOf(aw.a)
-        dueTotals[aw.a.currency] = (dueTotals[aw.a.currency] ?: 0L) + computeDue(aw.a, r)
-        wTotals[aw.a.currency] = (wTotals[aw.a.currency] ?: 0L) + (Money.parse(r.withdrawn) ?: 0L)
-        if (r.status == Status.PRESENT) present += 1.0
-        if (r.status == Status.HALF) present += 0.5
-    }
-
-    Scaffold(
-        topBar = {
-            AppBar("كشف المسحوبات اليومية للعمال", onBack = { nav.popBackStack() }, actions = {
-                if (editable) IconButton(onClick = {
-                    shown.filter { it.a.payType == PayType.DAILY }.forEach { aw ->
-                        rows[aw.a.id] = rowOf(aw.a).copy(status = Status.PRESENT)
-                    }
-                }) { Icon(Icons.Filled.DoneAll, contentDescription = "الكل حاضر") }
-            })
-        },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    KeyValue("الحاضرون", fmtNum(present))
-                    (dueTotals.keys + wTotals.keys).sorted().forEach { c ->
-                        KeyValue(
-                            "المستحق / المسحوب ($c)",
-                            "${money(dueTotals[c] ?: 0L, c, currencies)}  /  ${money(wTotals[c] ?: 0L, c, currencies)}",
-                            bold = true
-                        )
-                    }
-                    error?.let { Text(it, color = Bad) }
-                    Button(
-                        enabled = editable && !saving && shown.isNotEmpty(),
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        onClick = {
-                            val bad = shown.firstOrNull { aw ->
-                                val r = rowOf(aw.a)
-                                Money.parse(r.withdrawn) == null || parseDecimal(r.ot) == null || (parseDecimal(r.ot) ?: 0.0) < 0
-                            }
-                            if (bad != null) { error = "قيمة غير صحيحة في سطر ${bad.worker.name}"; return@Button }
-                            error = null
-                            val list = shown.map { aw ->
-                                val r = rowOf(aw.a)
-                                Attendance(
-                                    sheetId = 0, projectId = projectId, assignmentId = aw.a.id, date = date,
-                                    currency = aw.a.currency,
-                                    status = if (aw.a.payType == PayType.CONTRACT) Status.CONTRACT else r.status,
-                                    overtimeHours = if (r.status == Status.ABSENT) 0.0 else (parseDecimal(r.ot) ?: 0.0),
-                                    due = computeDue(aw.a, r),
-                                    withdrawn = Money.parse(r.withdrawn) ?: 0L,
-                                    workNote = r.note.trim()
-                                )
-                            }
-                            saving = true
-                            scope.launch {
-                                try {
-                                    repo.saveAttendance(projectId, date, list)
-                                    savedIds = savedIds + list.map { it.assignmentId }
-                                    Toast.makeText(ctx, "تم حفظ الكشف", Toast.LENGTH_SHORT).show()
-                                } catch (e: LockedException) {
-                                    error = e.message
-                                } finally {
-                                    saving = false
-                                }
-                            }
-                        }
-                    ) { Text(if (sheet == null) "حفظ الكشف" else "حفظ التعديلات") }
-                }
-            }
-        }
-    ) { pad ->
-        LazyColumn(
-            Modifier
-                .fillMaxSize()
-                .padding(pad),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            item { DateNavigator(date) { date = it } }
-            item {
-                val p = project
-                if (p != null) Text(
-                    "${p.name} • ${listOf(p.village, p.uzla, p.district, p.governorate).filter { it.isNotBlank() }.joinToString(" / ")}" +
-                        (sheet?.let { "  • كشف رقم ${it.serial}" } ?: ""),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            item { LockStatus(editable, sheet?.createdAt) }
-            if (shown.isEmpty()) item {
-                EmptyState("لا يوجد عمال نشطون في المشروع.\nأضف العمال من تبويب العمال في صفحة المشروع.")
-            }
-            items(shown, key = { it.a.id }) { aw ->
-                val a = aw.a
-                val r = rowOf(a)
-                val due = computeDue(a, r)
-                SectionCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(aw.worker.name, fontWeight = FontWeight.Bold)
-                            Text("${aw.worker.profession} • ${payLabel(a, currencies)}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (a.payType == PayType.DAILY) Text(
-                            money(due, a.currency, currencies),
-                            fontWeight = FontWeight.Bold,
-                            color = if (due > 0) Good else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (a.payType == PayType.DAILY) {
-                        Choice(
-                            listOf(Status.PRESENT to "حاضر", Status.HALF to "نصف يوم", Status.ABSENT to "غائب"),
-                            r.status, { rows[a.id] = r.copy(status = it) }, enabled = editable
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Field(
-                                "ساعات إضافية", r.ot, { rows[a.id] = r.copy(ot = it) },
-                                modifier = Modifier.weight(1f), keyboard = KeyboardType.Decimal,
-                                enabled = editable && r.status != Status.ABSENT
-                            )
-                            Field(
-                                "المبلغ المسحوب", r.withdrawn, { rows[a.id] = r.copy(withdrawn = it) },
-                                modifier = Modifier.weight(1f), keyboard = KeyboardType.Decimal, enabled = editable,
-                                isError = Money.parse(r.withdrawn) == null
-                            )
-                        }
-                    } else {
-                        Field(
-                            "دفعة من المقاولة (المبلغ المسحوب)", r.withdrawn, { rows[a.id] = r.copy(withdrawn = it) },
-                            keyboard = KeyboardType.Decimal, enabled = editable,
-                            isError = Money.parse(r.withdrawn) == null
-                        )
-                    }
-                    Field("بيان الأعمال المنفذة", r.note, { rows[a.id] = r.copy(note = it) }, enabled = editable, singleLine = false)
-                }
-            }
-            item { Spacer(Modifier.height(12.dp)) }
-        }
-    }
-}
-
 // =====================================================================
 // Worker account statement (كشف حساب عامل)
 // =====================================================================
 @Composable
 fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
+    val ctx = LocalContext.current
     val repo = Graph.repo
     val aw by rememberFlow<AssignmentWithWorker?>(assignmentId, initial = null) { repo.dao.assignmentFlow(assignmentId) }
     val rows by rememberFlow(assignmentId, initial = emptyList<Attendance>()) { repo.dao.attendanceForAssignment(assignmentId) }
@@ -434,6 +260,12 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
 
     Scaffold(topBar = {
         AppBar("كشف حساب: ${cur.worker.name}", onBack = { nav.popBackStack() }, actions = {
+            if (cur.worker.phone.isNotBlank()) IconButton(onClick = {
+                AppLock.allowExternal()
+                ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + cur.worker.phone)))
+            }) {
+                Icon(Icons.Filled.Call, contentDescription = "اتصال")
+            }
             IconButton(onClick = { nav.navigate(Routes.assign(a.projectId, a.id)) }) {
                 Icon(Icons.Filled.EditNote, contentDescription = "تعديل الاتفاق")
             }
@@ -451,7 +283,7 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
                     Text(cur.worker.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     KeyValue("المهنة", cur.worker.profession)
                     if (cur.worker.phone.isNotBlank()) KeyValue("الهاتف", cur.worker.phone)
-                    if (cur.worker.cardNo.isNotBlank()) KeyValue("رقم الكرت", cur.worker.cardNo)
+                    KeyValue("رقم الكرت في المشروع", "${a.cardNo}")
                     KeyValue("التصنيف", if (a.category == WorkerCategory.BASIC) "أساسي" else "مؤقت")
                     KeyValue("الاتفاق", payLabel(a, currencies))
                     if (!contract && a.overtimeRate > 0) KeyValue("سعر الساعة الإضافية", money(a.overtimeRate, c, currencies))

@@ -166,10 +166,9 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
                     "العملة", currencies, currencies.firstOrNull { it.code == currency },
                     { currencyLabel(it) }, { currency = it.code }, enabled = editable
                 )
-                Field(
-                    "المبلغ *", amount, { amount = it; error = null }, keyboard = KeyboardType.Decimal, enabled = editable,
-                    isError = Money.parse(amount) == null,
-                    supporting = if (kind == CashKind.OUT) "رصيد الصندوق الحالي: ${money(balance, currency, currencies)}" else null
+                MoneyField(
+                    "المبلغ *", amount, { amount = it; error = null }, currency, currencies, enabled = editable,
+                    hint = if (kind == CashKind.OUT) "رصيد الصندوق الحالي: ${money(balance, currency, currencies)}" else null
                 )
                 DropdownField("نوع المستند", DOC_TYPES, docType, { it }, { docType = it }, enabled = editable)
                 Field("رقم المستند", docNo, { docNo = it }, enabled = editable)
@@ -239,6 +238,7 @@ fun SettingsScreen(nav: NavController) {
     var bio by remember { mutableStateOf(PinManager.biometricEnabled(ctx)) }
     val bioAvailable = remember { Biometric.available(ctx) }
     var showPin by remember { mutableStateOf(false) }
+    var lockTimeout by remember { mutableStateOf(com.alshihab.fieldledger.AppLock.timeoutMs(ctx)) }
     val rooted = remember { DeviceIntegrity.isLikelyRooted() }
     val official = remember { DeviceIntegrity.isOfficialBuild(ctx) }
 
@@ -265,6 +265,17 @@ fun SettingsScreen(nav: NavController) {
                             bio = it; PinManager.setBiometric(ctx, it)
                         })
                     }
+                )
+                DropdownField(
+                    "القفل التلقائي بعد عدم الاستخدام",
+                    com.alshihab.fieldledger.AppLock.TIMEOUT_OPTIONS,
+                    com.alshihab.fieldledger.AppLock.TIMEOUT_OPTIONS.firstOrNull { it.first == lockTimeout },
+                    { it.second },
+                    { lockTimeout = it.first; com.alshihab.fieldledger.AppLock.setTimeout(ctx, it.first) }
+                )
+                Text(
+                    "يُقفل الدفتر ويطلب الرمز أو البصمة إذا بقي مفتوحاً دون لمس، أو في الخلفية، أطول من هذه المدة.",
+                    style = MaterialTheme.typography.bodySmall
                 )
                 HorizontalDivider()
                 KeyValue("تشفير قاعدة البيانات", "مفعّل (AES-256)", Good)

@@ -48,7 +48,7 @@ interface LedgerDao {
 
     // ---------- assignments ----------
     @Transaction
-    @Query("SELECT * FROM assignments WHERE projectId = :projectId ORDER BY active DESC, id")
+    @Query("SELECT * FROM assignments WHERE projectId = :projectId ORDER BY active DESC, cardNo, id")
     fun assignments(projectId: Long): Flow<List<AssignmentWithWorker>>
 
     @Transaction
@@ -60,6 +60,9 @@ interface LedgerDao {
 
     @Query("SELECT COUNT(*) FROM assignments WHERE projectId = :projectId AND workerId = :workerId")
     suspend fun assignmentExists(projectId: Long, workerId: Long): Int
+
+    @Query("SELECT MAX(cardNo) FROM assignments WHERE projectId = :projectId")
+    suspend fun maxCardNo(projectId: Long): Int?
 
     @Insert
     suspend fun insertAssignment(a: Assignment): Long
@@ -118,6 +121,9 @@ interface LedgerDao {
     // ---------- cash (A2F / B2F) ----------
     @Query("SELECT * FROM cash_entries WHERE projectId = :projectId AND date = :date ORDER BY id")
     fun cashOn(projectId: Long, date: String): Flow<List<CashEntry>>
+
+    @Query("SELECT * FROM cash_entries WHERE projectId = :projectId AND date = :date ORDER BY id")
+    suspend fun cashOnList(projectId: Long, date: String): List<CashEntry>
 
     @Query("SELECT * FROM cash_entries WHERE id = :id")
     suspend fun cashEntry(id: Long): CashEntry?

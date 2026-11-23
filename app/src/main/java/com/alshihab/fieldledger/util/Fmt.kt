@@ -84,3 +84,95 @@ object Dates {
         return if (h > 0) "$h ساعة و $m دقيقة" else "$m دقيقة"
     }
 }
+
+/** Arabic number-to-words ("تفقيط") for amounts, as written on Yemeni vouchers. */
+object Tafqeet {
+    private val ones = listOf("", "واحد", "اثنان", "ثلاثة", "أربعة", "خمسة", "ستة", "سبعة", "ثمانية", "تسعة")
+    private val teens = listOf(
+        "عشرة", "أحد عشر", "اثنا عشر", "ثلاثة عشر", "أربعة عشر", "خمسة عشر",
+        "ستة عشر", "سبعة عشر", "ثمانية عشر", "تسعة عشر"
+    )
+    private val tens = listOf("", "", "عشرون", "ثلاثون", "أربعون", "خمسون", "ستون", "سبعون", "ثمانون", "تسعون")
+    private val hundreds = listOf(
+        "", "مائة", "مائتان", "ثلاثمائة", "أربعمائة", "خمسمائة", "ستمائة", "سبعمائة", "ثمانمائة", "تسعمائة"
+    )
+
+    private class Scale(val one: String, val two: String, val plural: String)
+
+    private val scales = listOf(
+        Scale("ألف", "ألفان", "آلاف"),
+        Scale("مليون", "مليونان", "ملايين"),
+        Scale("مليار", "ملياران", "مليارات")
+    )
+
+    private fun below1000(n: Int): String {
+        val parts = mutableListOf<String>()
+        val h = n / 100
+        val r = n % 100
+        if (h > 0) parts += hundreds[h]
+        when {
+            r == 0 -> {}
+            r < 10 -> parts += ones[r]
+            r < 20 -> parts += teens[r - 10]
+            r % 10 == 0 -> parts += tens[r / 10]
+            else -> parts += "${ones[r % 10]} و${tens[r / 10]}"
+        }
+        return parts.joinToString(" و")
+    }
+
+    private fun scaled(n: Int, s: Scale): String = when {
+        n == 1 -> s.one
+        n == 2 -> s.two
+        n in 3..10 -> "${below1000(n)} ${s.plural}"
+        else -> "${below1000(n)} ${s.one}"
+    }
+
+    fun number(value: Long): String {
+        if (value == 0L) return "صفر"
+        var n = value
+        val groups = mutableListOf<Int>()
+        while (n > 0) {
+            groups += (n % 1000).toInt()
+            n /= 1000
+        }
+        val parts = mutableListOf<String>()
+        for (i in groups.indices.reversed()) {
+            val g = groups[i]
+            if (g == 0) continue
+            parts += if (i == 0) below1000(g) else scaled(g, scales[minOf(i - 1, scales.size - 1)])
+        }
+        return parts.joinToString(" و")
+    }
+
+    /** minor = amount x 100 */
+    fun amount(minor: Long, currencyName: String): String {
+        if (minor <= 0) return ""
+        val whole = minor / 100
+        val frac = (minor % 100).toInt()
+        val sb = StringBuilder("فقط ")
+        if (whole > 0) sb.append(number(whole)).append(' ').append(currencyName)
+        if (frac > 0) {
+            if (whole > 0) sb.append(" و")
+            sb.append(number(frac.toLong())).append(" من مائة")
+        }
+        sb.append(" لا غير")
+        return sb.toString()
+    }
+}
+
+/** keeps digits and a single decimal point (max 2 decimals); converts Arabic digits */
+fun cleanAmountInput(s: String): String {
+    val n = normalizeDigits(s)
+    val sb = StringBuilder()
+    var dot = false
+    var decimals = 0
+    for (ch in n) {
+        when {
+            ch.isDigit() && ch in '0'..'9' -> {
+                if (dot) { if (decimals < 2) { sb.append(ch); decimals++ } } else sb.append(ch)
+            }
+            ch == '.' && !dot -> { dot = true; sb.append(if (sb.isEmpty()) "0." else ".") }
+        }
+    }
+    return sb.toString().take(15)
+}

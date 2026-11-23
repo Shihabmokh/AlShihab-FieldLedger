@@ -1,5 +1,6 @@
 package com.alshihab.fieldledger.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
@@ -87,7 +88,9 @@ data class Assignment(
     val contractAmount: Long = 0,
     val progress: Int = 0,
     val active: Boolean = true,
-    val createdAt: Long = 0
+    val createdAt: Long = 0,
+    /** card number, auto-assigned sequentially inside each project */
+    @ColumnInfo(defaultValue = "0") val cardNo: Int = 0
 )
 
 data class AssignmentWithWorker(

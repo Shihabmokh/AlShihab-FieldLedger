@@ -47,7 +47,7 @@ fun AppNav() {
             AssignmentFormScreen(nav, it.arguments?.getLong("pid") ?: 0L, it.arguments?.getLong("aid") ?: 0L)
         }
         composable("attendance/{pid}/{date}", listOf(longArg("pid"), strArg("date"))) {
-            AttendanceScreen(nav, it.arguments?.getLong("pid") ?: 0L, it.arguments?.getString("date") ?: "")
+            DayEntryScreen(nav, it.arguments?.getLong("pid") ?: 0L, it.arguments?.getString("date") ?: "")
         }
         composable(
             "cash_form/{pid}/{date}/{eid}/{kind}",

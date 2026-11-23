@@ -161,7 +161,7 @@ private fun DashboardTab(nav: NavController, p: Project, currencies: List<Curren
                 ) {
                     Icon(Icons.Filled.FactCheck, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("الحضور والمسحوبات اليومية (3F)")
+                    Text("إدخال حركة اليوم (العمال + الصندوق)")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -206,7 +206,7 @@ private fun ProjectWorkersTab(nav: NavController, p: Project, currencies: List<C
                     Icon(Icons.Filled.Add, null); Text(" إضافة عامل للمشروع")
                 }
                 OutlinedButton(onClick = { nav.navigate(Routes.attendance(p.id, Dates.today())) }, modifier = Modifier.weight(1f)) {
-                    Text("كشف اليوم")
+                    Text("حركة اليوم")
                 }
             }
         }
@@ -218,7 +218,7 @@ private fun ProjectWorkersTab(nav: NavController, p: Project, currencies: List<C
             SectionCard(modifier = Modifier.clickable { nav.navigate(Routes.statement(a.id)) }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(aw.worker.name + if (!a.active) "  (انتهى عمله)" else "", fontWeight = FontWeight.Bold)
+                        Text("${a.cardNo}. ${aw.worker.name}" + if (!a.active) "  (انتهى عمله)" else "", fontWeight = FontWeight.Bold)
                         Text(
                             "${aw.worker.profession} • ${if (a.category == WorkerCategory.BASIC) "أساسي" else "مؤقت"} • ${payLabel(a, currencies)}",
                             style = MaterialTheme.typography.bodySmall
@@ -272,6 +272,11 @@ private fun CashTab(
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { DateNavigator(date, onDate) }
         item { LockStatus(editable, sheet?.createdAt) }
+        item {
+            Button(onClick = { nav.navigate(Routes.attendance(p.id, date)) }, modifier = Modifier.fillMaxWidth()) {
+                Text("فتح حركة هذا اليوم كاملة (العمال + الصندوق)")
+            }
+        }
         if (sheet != null) item {
             Text("كشف حركة الصندوق رقم ${sheet!!.serial}", style = MaterialTheme.typography.bodySmall)
         }
