@@ -8,6 +8,7 @@ import com.alshihab.fieldledger.util.Money
 
 class LockedException : Exception("الكشف مقفل ولا يمكن تعديله")
 class DuplicateException(msg: String) : Exception(msg)
+class StockException(msg: String) : Exception(msg)
 
 /**
  * Single entry point for every write. Each write is wrapped in a transaction together with its
@@ -93,11 +94,68 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
     }
 
     /** One transaction for the whole day: workers sheet (3F) and cash sheet (A2F/B2F). Null = section not saved. */
-    suspend fun saveDay(projectId: Long, date: String, attendance: List<Attendance>?, cash: List<CashEntry>?) =
-        db.withTransaction {
-            if (attendance != null) attendanceInner(projectId, date, attendance)
-            if (cash != null) cashDayInner(projectId, date, cash)
+    suspend fun saveDay(
+        projectId: Long,
+        date: String,
+        attendance: List<Attendance>?,
+        cash: List<CashEntry>?,
+        moves: Map<String, List<MaterialMove>> = emptyMap()
+    ) = db.withTransaction {
+        if (attendance != null) attendanceInner(projectId, date, attendance)
+        if (cash != null) cashDayInner(projectId, date, cash)
+        for ((type, list) in moves) movesInner(projectId, date, type, list)
+        if (moves.isNotEmpty()) checkStock(projectId)
+    }
+
+    // ---------- materials ----------
+    suspend fun saveMaterial(m: Material): Long = db.withTransaction {
+        if (dao.materialNameCount(m.projectId, m.name, m.id) > 0) throw DuplicateException("الصنف «${m.name}» موجود مسبقاً")
+        if (m.id == 0L) {
+            val id = dao.insertMaterial(m.copy(createdAt = now()))
+            audit("إنشاء", "صنف", id, "${m.name} (${m.unit})")
+            id
+        } else {
+            val old = dao.material(m.id)
+            dao.updateMaterial(m.copy(createdAt = old?.createdAt ?: m.createdAt))
+            audit("تعديل", "صنف", m.id, diff(old, m))
+            m.id
         }
+    }
+
+    private suspend fun movesInner(projectId: Long, date: String, type: String, moves: List<MaterialMove>) {
+        val form = MoveType.form(type)
+        val existingSheet = dao.findSheet(projectId, form, date)
+        if (!sheetEditable(existingSheet)) throw LockedException()
+        val toWrite = moves.filter { it.id != 0L || (!it.voided && it.qty > 0) }
+        if (toWrite.isEmpty()) return
+        val sheet = existingSheet ?: getOrCreateSheet(projectId, form, date)
+        for (m in toWrite) {
+            val fixed = m.copy(type = type, total = if (type == MoveType.PURCHASE) Math.round(m.qty * m.unitPrice) else 0L)
+            if (m.id == 0L) {
+                val id = dao.insertMove(fixed.copy(sheetId = sheet.id, projectId = projectId, date = date, createdAt = now()))
+                audit("إنشاء", "حركة مواد $form", id, describeMove(fixed))
+            } else {
+                val old = dao.move(m.id) ?: continue
+                val updated = fixed.copy(sheetId = old.sheetId, projectId = old.projectId, date = old.date, createdAt = old.createdAt)
+                if (updated != old) {
+                    dao.updateMove(updated)
+                    if (updated.voided && !old.voided) audit("إلغاء", "حركة مواد $form", m.id, describeMove(old))
+                    else audit("تعديل", "حركة مواد $form", m.id, "${describeMove(old)} ← ${describeMove(updated)}")
+                }
+            }
+        }
+    }
+
+    /** No material may go below zero: the whole day save is rolled back if it would. */
+    private suspend fun checkStock(projectId: Long) {
+        val negative = dao.stockNow(projectId).firstOrNull { it.qty < -0.0001 } ?: return
+        val name = dao.material(negative.materialId)?.name ?: "صنف"
+        throw StockException("الكمية المنصرفة من «$name» أكبر من الرصيد المتوفر في المخزن")
+    }
+
+    private fun describeMove(m: MaterialMove) =
+        "${when (m.type) { MoveType.PURCHASE -> "شراء"; MoveType.OFFICE -> "توريد من المكتب"; else -> "صرف" }} " +
+            "صنف ${m.materialId} كمية ${m.qty}" + if (m.type == MoveType.PURCHASE) " بقيمة ${Money.fmt(m.total)} ${m.currency}" else ""
 
     private suspend fun attendanceInner(projectId: Long, date: String, rows: List<Attendance>) {
         val existingSheet = dao.findSheet(projectId, Forms.WORKERS, date)

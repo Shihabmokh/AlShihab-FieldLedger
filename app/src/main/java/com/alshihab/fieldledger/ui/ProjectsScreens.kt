@@ -83,7 +83,7 @@ fun ProjectsScreen(nav: NavController) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (rooted) item { Banner("تحذير: الجهاز يبدو مكسور الحماية (Root). بيانات الدفتر قد تكون عرضة للخطر.", Bad) }
-            if (!official) item { Banner("هذه النسخة ليست موقعة بمفتاح المكتب الرسمي.", Accent) }
+            if (!official) item { Banner("هذه النسخة ليست موقعة بمفتاح المكتب الرسمي.", Warn) }
             if (projects.isEmpty()) item {
                 EmptyState("لا توجد مشاريع بعد.\nابدأ بإضافة مشروع جديد من الزر في الأسفل.")
             }

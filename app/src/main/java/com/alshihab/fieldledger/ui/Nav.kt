@@ -20,6 +20,8 @@ object Routes {
     fun attendance(projectId: Long, date: String) = "attendance/$projectId/$date"
     fun cashForm(projectId: Long, date: String, entryId: Long, kind: String) = "cash_form/$projectId/$date/$entryId/$kind"
     fun statement(assignmentId: Long) = "statement/$assignmentId"
+    fun material(materialId: Long) = "material/$materialId"
+    fun stockReport(projectId: Long) = "stock20/$projectId"
 }
 
 @Composable
@@ -60,6 +62,12 @@ fun AppNav() {
                 it.arguments?.getLong("eid") ?: 0L,
                 it.arguments?.getString("kind") ?: "OUT"
             )
+        }
+        composable("material/{mid}", listOf(longArg("mid"))) {
+            MaterialCardScreen(nav, it.arguments?.getLong("mid") ?: 0L)
+        }
+        composable("stock20/{pid}", listOf(longArg("pid"))) {
+            StockReportScreen(nav, it.arguments?.getLong("pid") ?: 0L)
         }
         composable("statement/{aid}", listOf(longArg("aid"))) {
             WorkerStatementScreen(nav, it.arguments?.getLong("aid") ?: 0L)

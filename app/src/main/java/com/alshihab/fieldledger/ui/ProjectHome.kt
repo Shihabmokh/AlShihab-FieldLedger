@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Engineering
 import androidx.compose.material.icons.filled.FactCheck
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -90,6 +91,7 @@ fun ProjectHome(nav: NavController, id: Long) {
                     "الرئيسية" to Icons.Filled.Dashboard,
                     "العمال" to Icons.Filled.Engineering,
                     "الصندوق" to Icons.Filled.AccountBalanceWallet,
+                    "المخزن" to Icons.Filled.Inventory2,
                     "التقارير" to Icons.Filled.Assessment
                 )
                 tabs.forEachIndexed { i, (label, icon) ->
@@ -97,7 +99,8 @@ fun ProjectHome(nav: NavController, id: Long) {
                         selected = tab == i,
                         onClick = { tab = i },
                         icon = { Icon(icon, contentDescription = null) },
-                        label = { Text(label) }
+                        label = { Text(label, maxLines = 1) },
+                    alwaysShowLabel = true
                     )
                 }
             }
@@ -113,6 +116,7 @@ fun ProjectHome(nav: NavController, id: Long) {
                 0 -> DashboardTab(nav, p, currencies)
                 1 -> ProjectWorkersTab(nav, p, currencies)
                 2 -> CashTab(nav, p, currencies, cashDate) { cashDate = it }
+                3 -> StoreTab(nav, p, currencies)
                 else -> ReportsTab(p, currencies)
             }
         }
@@ -126,16 +130,17 @@ private fun DashboardTab(nav: NavController, p: Project, currencies: List<Curren
     val today = remember { Dates.today() }
     val cashNet by rememberFlow(p.id, initial = emptyList<CurrencyTotal>()) { repo.dao.cashNet(p.id) }
     val withdrawn by rememberFlow(p.id, initial = emptyList<CurrencyTotal>()) { repo.dao.withdrawTotals(p.id) }
+    val purchases by rememberFlow(p.id, "p", initial = emptyList<CurrencyTotal>()) { repo.dao.purchaseTotals(p.id) }
     val todayRows by rememberFlow(p.id, today, initial = emptyList<Attendance>()) { repo.dao.attendanceOn(p.id, today) }
     val assignments by rememberFlow(p.id, initial = emptyList<AssignmentWithWorker>()) { repo.dao.assignments(p.id) }
     val clockOk = remember { TimeGuard.clockOk(ctx) }
-    val balance = mergeMinus(cashNet.toMap(), withdrawn.toMap())
+    val balance = mergeMinus(mergeMinus(cashNet.toMap(), withdrawn.toMap()), purchases.toMap())
 
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (!clockOk) item {
             Banner("ساعة الجهاز أقدم من آخر وقت مسجل. التعديل موقوف حتى تُضبط الساعة بشكل صحيح.", Bad)
         }
-        if (!p.active) item { Banner("هذا المشروع موقوف.", Accent) }
+        if (!p.active) item { Banner("هذا المشروع موقوف.", Warn) }
         item {
             SectionCard("رصيد الصندوق الحالي") {
                 if (balance.isEmpty()) Text("لا توجد حركة بعد", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -258,13 +263,15 @@ private fun CashTab(
     val netBefore by rememberFlow(p.id, date, initial = emptyList<CurrencyTotal>()) { repo.dao.cashNetBefore(p.id, date) }
     val wBefore by rememberFlow(p.id, date, initial = emptyList<CurrencyTotal>()) { repo.dao.withdrawTotalsBefore(p.id, date) }
     val wToday by rememberFlow(p.id, date, initial = emptyList<CurrencyTotal>()) { repo.dao.withdrawTotalsOn(p.id, date) }
+    val pBefore by rememberFlow(p.id, "pb$date", initial = emptyList<CurrencyTotal>()) { repo.dao.purchaseTotalsBefore(p.id, date) }
+    val pToday by rememberFlow(p.id, "pt$date", initial = emptyList<CurrencyTotal>()) { repo.dao.purchaseTotalsOn(p.id, date) }
     val editable = remember(sheet) { repo.sheetEditable(sheet) }
 
     val live = entries.filter { !it.voided }
-    val carried = mergeMinus(netBefore.toMap(), wBefore.toMap())
+    val carried = mergeMinus(mergeMinus(netBefore.toMap(), wBefore.toMap()), pBefore.toMap())
     val receipts = live.filter { it.kind == CashKind.IN }.groupBy { it.currency }.mapValues { e -> e.value.sumOf { it.amount } }
     val cashOut = live.filter { it.kind == CashKind.OUT }.groupBy { it.currency }.mapValues { e -> e.value.sumOf { it.amount } }
-    val payments = mergePlus(cashOut, wToday.toMap())
+    val payments = mergePlus(mergePlus(cashOut, wToday.toMap()), pToday.toMap())
     val codes = (carried.keys + receipts.keys + payments.keys).filter {
         (carried[it] ?: 0L) != 0L || (receipts[it] ?: 0L) != 0L || (payments[it] ?: 0L) != 0L
     }.sorted()
@@ -289,7 +296,9 @@ private fun CashTab(
                     Text(cName, fontWeight = FontWeight.Bold, color = Brand)
                     KeyValue("الرصيد المرحّل من اليوم السابق", money(carried[c] ?: 0L, c, currencies))
                     KeyValue("+ المقبوضات", money(receipts[c] ?: 0L, c, currencies), Good)
-                    KeyValue("− المدفوعات (منها مسحوبات العمال ${money(wToday.toMap()[c] ?: 0L, c, currencies)})", money(payments[c] ?: 0L, c, currencies), Bad)
+                    KeyValue("− المدفوعات", money(payments[c] ?: 0L, c, currencies), Bad)
+                    KeyValue("   منها مسحوبات العمال", money(wToday.toMap()[c] ?: 0L, c, currencies))
+                    KeyValue("   منها مشتريات المواد", money(pToday.toMap()[c] ?: 0L, c, currencies))
                     KeyValue("= الرصيد الحالي بالصندوق", money(current, c, currencies), if (current < 0) Bad else Good, bold = true)
                     HorizontalDivider()
                 }
@@ -344,15 +353,17 @@ private fun ReportsTab(p: Project, currencies: List<CurrencyEntity>) {
     val withdrawn by rememberFlow(p.id, initial = emptyList<CurrencyTotal>()) { repo.dao.withdrawTotals(p.id) }
     val outCats by rememberFlow(p.id, CashKind.OUT, initial = emptyList<CategoryTotal>()) { repo.dao.categoryTotals(p.id, CashKind.OUT) }
     val inCats by rememberFlow(p.id, CashKind.IN, initial = emptyList<CategoryTotal>()) { repo.dao.categoryTotals(p.id, CashKind.IN) }
+    val purchases by rememberFlow(p.id, "p", initial = emptyList<CurrencyTotal>()) { repo.dao.purchaseTotals(p.id) }
+    val pu = purchases.toMap()
 
     val receipts = inCats.groupBy { it.currency }.mapValues { e -> e.value.sumOf { it.total } }
     val expenses = outCats.groupBy { it.currency }.mapValues { e -> e.value.sumOf { it.total } }
     val w = withdrawn.toMap()
-    val codes = (receipts.keys + expenses.keys + w.keys).sorted()
+    val codes = (receipts.keys + expenses.keys + w.keys + pu.keys).sorted()
 
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Banner("تصدير PDF و Excel والكشوفات الأسبوعية (5F، 7F، 8F، 24T، 25T) ستُضاف في المرحلة الثالثة.", Brand)
+            Banner("تصدير PDF و Excel والكشوفات الأسبوعية (5F، 7F، 8F، 24T، 25T) ستُضاف في المرحلة الثالثة. كشف المخزن 20F في تبويب المخزن.", Brand)
         }
         item {
             SectionCard("النشاط المالي التراكمي للمشروع") {
@@ -363,10 +374,12 @@ private fun ReportsTab(p: Project, currencies: List<CurrencyEntity>) {
                     val wd = w[c] ?: 0L
                     Text(currencies.firstOrNull { it.code == c }?.name ?: c, fontWeight = FontWeight.Bold, color = Brand)
                     KeyValue("إجمالي المقبوضات", money(r, c, currencies), Good)
+                    val pv = pu[c] ?: 0L
                     KeyValue("مسحوبات العمال", money(wd, c, currencies))
+                    KeyValue("قيمة المواد المشتراة", money(pv, c, currencies))
                     KeyValue("المصروفات الأخرى", money(ex, c, currencies))
-                    KeyValue("إجمالي المدفوعات", money(wd + ex, c, currencies), Bad)
-                    KeyValue("الرصيد الباقي في الصندوق", money(r - wd - ex, c, currencies), bold = true)
+                    KeyValue("إجمالي المدفوعات", money(wd + pv + ex, c, currencies), Bad)
+                    KeyValue("الرصيد الباقي في الصندوق", money(r - wd - pv - ex, c, currencies), bold = true)
                     HorizontalDivider()
                 }
             }

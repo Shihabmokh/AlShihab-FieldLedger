@@ -73,6 +73,13 @@ object Dates {
         else -> ""
     }
 
+    /** Week starts on Saturday, as in the office forms. */
+    fun weekStart(date: String): String {
+        val d = LocalDate.parse(date)
+        val offset = (d.dayOfWeek.value - DayOfWeek.SATURDAY.value + 7) % 7
+        return d.minusDays(offset.toLong()).toString()
+    }
+
     fun label(date: String) = "${dayName(date)}  $date"
 
     fun dateTime(ms: Long): String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(ms))

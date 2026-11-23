@@ -81,6 +81,7 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
     val sheet by rememberFlow<Sheet?>(projectId, date, initial = null) { repo.dao.sheetFlow(projectId, Forms.CASH, date) }
     val cashNet by rememberFlow(projectId, initial = emptyList<CurrencyTotal>()) { repo.dao.cashNet(projectId) }
     val withdrawn by rememberFlow(projectId, initial = emptyList<CurrencyTotal>()) { repo.dao.withdrawTotals(projectId) }
+    val purchases by rememberFlow(projectId, "p", initial = emptyList<CurrencyTotal>()) { repo.dao.purchaseTotals(projectId) }
 
     var loaded by remember { mutableStateOf(false) }
     var original by remember { mutableStateOf<CashEntry?>(null) }
@@ -112,7 +113,7 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
     }
 
     val editable = remember(sheet) { repo.sheetEditable(sheet) } && loaded && original?.voided != true
-    val balance = mergeMinus(cashNet.toMap(), withdrawn.toMap())[currency] ?: 0L
+    val balance = mergeMinus(mergeMinus(cashNet.toMap(), withdrawn.toMap()), purchases.toMap())[currency] ?: 0L
 
     fun doSave() {
         val amt = Money.parse(amount) ?: return
@@ -283,7 +284,7 @@ fun SettingsScreen(nav: NavController) {
                 KeyValue("النسخ الاحتياطي السحابي", "معطّل", Good)
                 KeyValue("حذف البيانات", "ممنوع على مستوى قاعدة البيانات", Good)
                 KeyValue("سلامة الجهاز", if (rooted) "مكسور الحماية!" else "سليم", if (rooted) Bad else Good)
-                KeyValue("توقيع التطبيق", if (official) "رسمي" else "غير رسمي", if (official) Good else Accent)
+                KeyValue("توقيع التطبيق", if (official) "رسمي" else "غير رسمي", if (official) Good else Warn)
             }
             SectionCard("البيانات") {
                 ListItem(
@@ -300,7 +301,11 @@ fun SettingsScreen(nav: NavController) {
             }
             SectionCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.Shield, null, tint = Brand)
+                    androidx.compose.foundation.Image(
+                        painter = androidx.compose.ui.res.painterResource(com.alshihab.fieldledger.R.drawable.logo_sh),
+                        contentDescription = null,
+                        modifier = Modifier.height(56.dp)
+                    )
                     Column(Modifier.padding(start = 10.dp)) {
                         Text("الدفتر الميداني – الشهاب", fontWeight = FontWeight.Bold)
                         Text("الإصدار ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)

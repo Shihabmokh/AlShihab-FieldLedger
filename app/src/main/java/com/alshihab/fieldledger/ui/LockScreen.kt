@@ -146,16 +146,14 @@ fun LockScreen(activity: FragmentActivity) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Box(
-                Modifier
-                    .size(72.dp)
-                    .background(Brand, CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Filled.Lock, contentDescription = null, tint = Color.White, modifier = Modifier.size(36.dp))
-            }
+            androidx.compose.foundation.Image(
+                painter = androidx.compose.ui.res.painterResource(com.alshihab.fieldledger.R.drawable.logo_sh),
+                contentDescription = "شعار مكتب الشهاب",
+                modifier = Modifier.size(width = 150.dp, height = 117.dp)
+            )
             Spacer(Modifier.height(12.dp))
             Text("الدفتر الميداني – الشهاب", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Brand)
+            Text("مكتب الشهاب للمقاولات العامة", fontSize = 13.sp, color = Accent)
             Spacer(Modifier.height(8.dp))
             Text(title, textAlign = TextAlign.Center)
             Spacer(Modifier.height(16.dp))

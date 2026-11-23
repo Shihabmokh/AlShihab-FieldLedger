@@ -101,6 +101,9 @@ data class AssignmentWithWorker(
 object Forms {
     const val WORKERS = "3F"
     const val CASH = "A2F"
+    const val PURCHASE = "4F"
+    const val OFFICE = "OFS"
+    const val ISSUE = "31F"
 }
 
 /** A daily statement (كشف). Editable for 24h after [createdAt], then locked forever. */
@@ -173,7 +176,73 @@ data class AuditLog(
     val details: String
 )
 
+/** Material catalogue of a project (الأصناف). */
+@Entity(
+    tableName = "materials",
+    indices = [Index("projectId"), Index(value = ["projectId", "name"], unique = true)]
+)
+data class Material(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val projectId: Long,
+    val name: String,
+    val unit: String,
+    val minQty: Double = 0.0,
+    val active: Boolean = true,
+    val createdAt: Long = 0
+)
+
+object MoveType {
+    const val PURCHASE = "P"  // 4F  مشتراة - تدخل المخزن وتُخصم من الصندوق
+    const val OFFICE = "O"    // موردة من المكتب - تدخل المخزن بالكمية فقط
+    const val ISSUE = "I"     // 31F منصرفة من المخزن
+
+    fun form(type: String) = when (type) {
+        PURCHASE -> Forms.PURCHASE
+        OFFICE -> Forms.OFFICE
+        else -> Forms.ISSUE
+    }
+}
+
+@Entity(
+    tableName = "material_moves",
+    indices = [Index("sheetId"), Index("projectId"), Index("materialId")]
+)
+data class MaterialMove(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sheetId: Long,
+    val projectId: Long,
+    val materialId: Long,
+    val date: String,
+    val type: String,
+    val qty: Double,
+    val unitPrice: Long = 0,
+    val total: Long = 0,
+    val currency: String = "",
+    /** shop name for purchases */
+    val shop: String = "",
+    /** invoice no. / delivery note no. */
+    val docNo: String = "",
+    /** work site for issues */
+    val site: String = "",
+    /** receiver (office supply) or the person doing the work (issue) */
+    val person: String = "",
+    val details: String = "",
+    val voided: Boolean = false,
+    val createdAt: Long = 0
+)
+
 // ---- query result types ----
+data class StockQty(val materialId: Long, val qty: Double)
+
+data class MaterialPeriod(
+    val materialId: Long,
+    val opening: Double,
+    val purchased: Double,
+    val office: Double,
+    val issued: Double,
+    val purchasedValue: Long
+)
+
 data class CurrencyTotal(val currency: String, val total: Long)
 
 data class AssignmentTotal(

@@ -152,6 +152,78 @@ interface LedgerDao {
     )
     fun categoryTotals(projectId: Long, kind: String): Flow<List<CategoryTotal>>
 
+    // ---------- materials ----------
+    @Query("SELECT * FROM materials WHERE projectId = :projectId ORDER BY active DESC, name")
+    fun materials(projectId: Long): Flow<List<Material>>
+
+    @Query("SELECT * FROM materials WHERE id = :id")
+    suspend fun material(id: Long): Material?
+
+    @Query("SELECT COUNT(*) FROM materials WHERE projectId = :projectId AND name = :name AND id != :exceptId")
+    suspend fun materialNameCount(projectId: Long, name: String, exceptId: Long): Int
+
+    @Insert
+    suspend fun insertMaterial(m: Material): Long
+
+    @Update
+    suspend fun updateMaterial(m: Material)
+
+    @Query(
+        "SELECT materialId, SUM(CASE WHEN type = 'I' THEN -qty ELSE qty END) AS qty " +
+            "FROM material_moves WHERE projectId = :projectId AND voided = 0 GROUP BY materialId"
+    )
+    fun stock(projectId: Long): Flow<List<StockQty>>
+
+    @Query(
+        "SELECT materialId, SUM(CASE WHEN type = 'I' THEN -qty ELSE qty END) AS qty " +
+            "FROM material_moves WHERE projectId = :projectId AND voided = 0 GROUP BY materialId"
+    )
+    suspend fun stockNow(projectId: Long): List<StockQty>
+
+    @Query("SELECT * FROM material_moves WHERE projectId = :projectId AND date = :date ORDER BY id")
+    suspend fun movesOnList(projectId: Long, date: String): List<MaterialMove>
+
+    @Query("SELECT * FROM material_moves WHERE materialId = :materialId ORDER BY date, id")
+    fun movesForMaterial(materialId: Long): Flow<List<MaterialMove>>
+
+    @Query("SELECT * FROM material_moves WHERE id = :id")
+    suspend fun move(id: Long): MaterialMove?
+
+    @Insert
+    suspend fun insertMove(m: MaterialMove): Long
+
+    @Update
+    suspend fun updateMove(m: MaterialMove)
+
+    @Query(
+        "SELECT currency, SUM(total) AS total FROM material_moves " +
+            "WHERE projectId = :projectId AND type = 'P' AND voided = 0 GROUP BY currency"
+    )
+    fun purchaseTotals(projectId: Long): Flow<List<CurrencyTotal>>
+
+    @Query(
+        "SELECT currency, SUM(total) AS total FROM material_moves " +
+            "WHERE projectId = :projectId AND type = 'P' AND voided = 0 AND date < :date GROUP BY currency"
+    )
+    fun purchaseTotalsBefore(projectId: Long, date: String): Flow<List<CurrencyTotal>>
+
+    @Query(
+        "SELECT currency, SUM(total) AS total FROM material_moves " +
+            "WHERE projectId = :projectId AND type = 'P' AND voided = 0 AND date = :date GROUP BY currency"
+    )
+    fun purchaseTotalsOn(projectId: Long, date: String): Flow<List<CurrencyTotal>>
+
+    @Query(
+        "SELECT materialId, " +
+            "SUM(CASE WHEN date < :from THEN (CASE WHEN type = 'I' THEN -qty ELSE qty END) ELSE 0 END) AS opening, " +
+            "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'P' THEN qty ELSE 0 END) AS purchased, " +
+            "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'O' THEN qty ELSE 0 END) AS office, " +
+            "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'I' THEN qty ELSE 0 END) AS issued, " +
+            "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'P' THEN total ELSE 0 END) AS purchasedValue " +
+            "FROM material_moves WHERE projectId = :projectId AND voided = 0 AND date <= :to GROUP BY materialId"
+    )
+    fun stockPeriod(projectId: Long, from: String, to: String): Flow<List<MaterialPeriod>>
+
     // ---------- audit ----------
     @Insert
     suspend fun insertAudit(a: AuditLog): Long

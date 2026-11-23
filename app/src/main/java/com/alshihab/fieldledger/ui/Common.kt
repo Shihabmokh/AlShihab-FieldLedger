@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -64,22 +65,29 @@ import com.alshihab.fieldledger.util.Dates
 import com.alshihab.fieldledger.util.Money
 import kotlinx.coroutines.flow.Flow
 
-val Brand = Color(0xFF0E4C5A)
-val Accent = Color(0xFFF2A93B)
+// Al-Shihab office logo palette
+val Brand = Color(0xFF14228F)      // logo navy
+val BrandDark = Color(0xFF0F196E)
+val Accent = Color(0xFF490093)     // logo purple ("CONTRACTING")
+val BrandGray = Color(0xFF9A9BAD)  // logo grey line
+val Warn = Color(0xFFE08A00)
 val Good = Color(0xFF2E7D32)
 val Bad = Color(0xFFC62828)
 
 private val colors = lightColorScheme(
     primary = Brand,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFD3E8EC),
-    onPrimaryContainer = Color(0xFF06303A),
+    primaryContainer = Color(0xFFDDE1F7),
+    onPrimaryContainer = BrandDark,
     secondary = Accent,
-    onSecondary = Color.Black,
-    secondaryContainer = Color(0xFFFFE8C4),
-    background = Color(0xFFF4F7F8),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE9DDF7),
+    onSecondaryContainer = Color(0xFF2B0057),
+    tertiary = BrandGray,
+    background = Color(0xFFF3F4FA),
     surface = Color.White,
-    surfaceVariant = Color(0xFFE7EEF0),
+    surfaceVariant = Color(0xFFE6E8F2),
+    outline = BrandGray,
     error = Bad
 )
 
@@ -111,6 +119,7 @@ fun <T> rememberFlow(key1: Any?, key2: Any? = null, initial: T, factory: () -> F
 
 @Composable
 fun AppBar(title: String, onBack: (() -> Unit)? = null, actions: @Composable () -> Unit = {}) {
+    Column {
     TopAppBar(
         title = { Text(title, maxLines = 1, fontWeight = FontWeight.Bold) },
         navigationIcon = {
@@ -126,6 +135,10 @@ fun AppBar(title: String, onBack: (() -> Unit)? = null, actions: @Composable () 
             actionIconContentColor = Color.White
         )
     )
+    // thin purple + grey rule like the office letterhead
+    Box(Modifier.fillMaxWidth().height(3.dp).background(Accent))
+    Box(Modifier.fillMaxWidth().height(2.dp).background(BrandGray))
+    }
 }
 
 @Composable
@@ -220,7 +233,7 @@ fun SectionCard(title: String? = null, modifier: Modifier = Modifier, content: @
 }
 
 @Composable
-fun Banner(text: String, color: Color = Accent, icon: ImageVector = Icons.Filled.Warning) {
+fun Banner(text: String, color: Color = Warn, icon: ImageVector = Icons.Filled.Warning) {
     Row(
         Modifier
             .fillMaxWidth()
