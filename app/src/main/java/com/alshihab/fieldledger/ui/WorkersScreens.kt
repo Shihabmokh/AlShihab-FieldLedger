@@ -127,6 +127,8 @@ fun WorkerFormScreen(nav: NavController, id: Long) {
     var notes by rememberSaveable { mutableStateOf("") }
     var active by rememberSaveable { mutableStateOf(true) }
     var nameError by remember { mutableStateOf(false) }
+    val rates by rememberFlow("rates", initial = emptyList<com.alshihab.fieldledger.data.WageRate>()) { repo.dao.wageRates() }
+    val manualAllowed = remember { com.alshihab.fieldledger.security.OfficePolicy.allowManualWage(ctx) }
 
     val contactPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         val uri = res.data?.data ?: return@rememberLauncherForActivityResult
@@ -185,12 +187,25 @@ fun WorkerFormScreen(nav: NavController, id: Long) {
             SectionCard {
                 Field("الاسم الكامل *", name, { name = it; nameError = false }, isError = nameError,
                     supporting = if (nameError) "الاسم مطلوب" else null)
-                Field("المهنة / الصفة", profession, { profession = it })
+                val titles = rates.filter { it.active }.map { it.title }.distinct()
+                if (titles.isEmpty()) {
+                    Field("المهنة / الصفة", profession, { profession = it })
+                } else {
+                    val other = "أخرى…"
+                    val inList = profession in titles
+                    DropdownField(
+                        "المهنة (يحدد المكتب أجرها)",
+                        if (manualAllowed) titles + other else titles,
+                        if (inList) profession else if (profession.isNotBlank() && manualAllowed) other else null,
+                        { it }, { profession = if (it == other) "" else it }
+                    )
+                    if (manualAllowed && !inList) Field("مهنة أخرى (يُدخل أجرها يدوياً)", profession, { profession = it })
+                }
                 Field("رقم الهاتف", phone, { phone = it }, keyboard = KeyboardType.Phone)
                 Field("ملاحظات", notes, { notes = it }, singleLine = false)
             }
             Text(
-                "الأجر ونوع العمل (يومية أو مقاولة) ورقم الكرت تُحدد عند إضافة العامل إلى مشروع، ورقم الكرت يُعطى تلقائياً بالتسلسل داخل كل مشروع.",
+                "الأجر اليومي يحدده المكتب حسب المهنة، ونوع العمل (يومية أو مقاولة) يُحدد عند إضافة العامل إلى مشروع، ورقم الكرت يُعطى تلقائياً بالتسلسل داخل كل مشروع.",
                 style = MaterialTheme.typography.bodySmall
             )
             if (id != 0L) SectionCard {

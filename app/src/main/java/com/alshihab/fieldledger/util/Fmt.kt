@@ -57,6 +57,9 @@ fun parseDecimal(s: String): Double? {
 fun fmtNum(d: Double): String =
     if (d == Math.floor(d)) d.toLong().toString() else BigDecimal(d).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 
+fun fmtRate(d: Double): String =
+    BigDecimal(d).setScale(6, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+
 object Dates {
     fun today(): String = LocalDate.now().toString()
     fun shift(date: String, days: Long): String = LocalDate.parse(date).plusDays(days).toString()
@@ -182,4 +185,29 @@ fun cleanAmountInput(s: String): String {
         }
     }
     return sb.toString().take(15)
+}
+
+/** Exchange-rate lookup over the dated rate table. A rate is used from its date until a newer one is entered. */
+object Fx {
+    /** 1 [from] = result [to], using the newest rate dated on/before [on] (direct or inverse); null if none. */
+    fun factor(rates: List<com.alshihab.fieldledger.data.FxRate>, from: String, to: String, on: String): Double? {
+        if (from == to) return 1.0
+        val best = rates.filter {
+            it.date <= on && ((it.fromCur == from && it.toCur == to) || (it.fromCur == to && it.toCur == from))
+        }.maxWithOrNull(compareBy({ it.date }, { it.id })) ?: return null
+        if (best.rate <= 0.0) return null
+        return if (best.fromCur == from) best.rate else 1.0 / best.rate
+    }
+
+    /**
+     * The natural way to write a pair: "1 USD = 530 YER" rather than "1 YER = 0.0019 USD".
+     * Returns true when [a] should be on the left (1 a = x b).
+     */
+    fun aOnLeft(rates: List<com.alshihab.fieldledger.data.FxRate>, a: String, b: String, decimalsOf: (String) -> Int): Boolean {
+        rates.firstOrNull { (it.fromCur == a && it.toCur == b) || (it.fromCur == b && it.toCur == a) }?.let { return it.fromCur == a }
+        val da = decimalsOf(a)
+        val db = decimalsOf(b)
+        if (da != db) return da > db       // rials (0 decimals) go on the right
+        return true
+    }
 }

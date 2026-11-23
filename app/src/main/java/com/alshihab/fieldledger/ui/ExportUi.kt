@@ -1,7 +1,10 @@
 package com.alshihab.fieldledger.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -44,7 +47,7 @@ import java.io.File
 
 /** PDF / Excel export buttons. After exporting the user can open the file or share/save it. */
 @Composable
-fun ExportButtons(projectId: Long, kind: ReportKind, from: String, to: String, extraId: Long = 0, tint: Color = Color.White) {
+fun ExportButtons(projectId: Long, kind: ReportKind, from: String, to: String, extraId: Long = 0, tint: Color = Color.White, full: Boolean = false) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
@@ -55,7 +58,10 @@ fun ExportButtons(projectId: Long, kind: ReportKind, from: String, to: String, e
         busy = true
         scope.launch {
             try {
-                ready = withContext(Dispatchers.IO) { Exporter.export(ctx, kind, projectId, from, to, extraId, format) }
+                ready = withContext(Dispatchers.IO) {
+                    if (full) Exporter.exportFull(ctx, projectId, from, to, format)
+                    else Exporter.export(ctx, kind, projectId, from, to, extraId, format)
+                }
             } catch (e: Exception) {
                 Toast.makeText(ctx, "تعذر التصدير: ${e.message}", Toast.LENGTH_LONG).show()
             } finally {
@@ -143,11 +149,24 @@ fun ReportsExportCard(p: Project) {
             style = MaterialTheme.typography.bodySmall, color = if (valid) Brand else Bad
         )
         HorizontalDivider()
+        if (valid) Row(
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("التقرير الشامل (كل الكشوفات في ملف واحد)", fontWeight = FontWeight.Bold, color = Brand)
+                Text("ملف PDF ينتهي بصور الفواتير والمرفقات، أو Excel بورقة لكل كشف", style = MaterialTheme.typography.bodySmall)
+            }
+            ExportButtons(p.id, ReportKind.F3, from, to, tint = Brand, full = true)
+        }
+        HorizontalDivider()
         ReportKind.values().filter { it != ReportKind.STATEMENT }.forEach { k ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(k.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                    Text("نموذج ${k.formNo}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (valid) ExportButtons(p.id, k, from, to, tint = Brand)
             }

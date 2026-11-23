@@ -177,6 +177,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
     val returnSheet by rememberFlow<Sheet?>(projectId, "r$date", initial = null) { repo.dao.sheetFlow(projectId, Forms.RETURN, date) }
     val moves = remember { mutableStateListOf<MoveDraft>() }
     var newMaterialFor by remember { mutableStateOf<Long?>(null) }
+    val fxRates by rememberFlow(Unit, "fx", initial = emptyList<com.alshihab.fieldledger.data.FxRate>()) { repo.dao.fxRates() }
     val rows = remember { mutableStateMapOf<Long, RowState>() }
     val cash = remember { mutableStateListOf<CashDraft>() }
     var savedIds by remember { mutableStateOf(setOf<Long>()) }
@@ -191,6 +192,8 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
         loadedFor = null
         val ws = repo.dao.findSheet(projectId, Forms.WORKERS, date)
         val existing = if (ws != null) repo.dao.attendanceForSheet(ws.id) else emptyList()
+        val fxList = repo.dao.fxRatesList()
+        val curList = repo.dao.currenciesList()
         rows.clear()
         existing.forEach {
             val paidCur = it.payCurrency.ifBlank { it.currency }
@@ -200,8 +203,12 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 withdrawn = Money.toInput(if (it.payCurrency.isBlank()) it.withdrawn else it.payAmount),
                 note = it.workNote,
                 payCurrency = paidCur,
-                rate = if (paidCur == it.currency) "" else fmtNum(it.rate)
-            )
+                payLeft = com.alshihab.fieldledger.util.Fx.aOnLeft(fxList, paidCur, it.currency) { c -> curList.firstOrNull { x -> x.code == c }?.decimals ?: 2 },
+                rate = ""
+            ).let { rs ->
+                if (paidCur == it.currency || it.rate <= 0.0) rs
+                else rs.copy(rate = com.alshihab.fieldledger.util.fmtRate(if (rs.payLeft) it.rate else 1.0 / it.rate))
+            }
         }
         savedIds = existing.map { it.assignmentId }.toSet()
         cash.clear()
@@ -323,7 +330,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 withdrawn = r.accountWithdrawn(aw.a) ?: 0L,
                 payCurrency = r.payCur(aw.a),
                 payAmount = Money.parse(r.withdrawn) ?: 0L,
-                rate = if (r.payCur(aw.a) == aw.a.currency) 1.0 else (parseDecimal(r.rate) ?: 1.0),
+                rate = if (r.payCur(aw.a) == aw.a.currency) 1.0 else (r.factor() ?: 1.0),
                 workNote = r.note.trim()
             )
         }
@@ -331,7 +338,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
         if (workEditable) shown.forEach { aw ->
             val r = rowOf(aw)
             val pc = r.payCur(aw.a)
-            if (pc != aw.a.currency) parseDecimal(r.rate)?.takeIf { it > 0 }?.let { OfficePolicy.saveRate(ctx, pc, aw.a.currency, it) }
+            if (pc != aw.a.currency) r.factor()?.let { OfficePolicy.saveRate(ctx, pc, aw.a.currency, it) }
         }
         val moveMap = listOf(MoveType.PURCHASE, MoveType.OFFICE, MoveType.ISSUE, MoveType.RETURN)
             .filter { moveEditable(it) }
@@ -428,7 +435,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
             // ================= workers (3F) =================
             if (loaded) item {
                 SectionHeader(
-                    title = "العمال - كشف المسحوبات (3F)" + (workSheet?.let { "  رقم ${it.serial}" } ?: ""),
+                    title = "العمال - المسحوبات اليومية" + (workSheet?.let { "  رقم ${it.serial}" } ?: ""),
                     subtitle = "${shown.size} عامل",
                     open = workersOpen,
                     onToggle = { workersOpen = !workersOpen }
@@ -442,9 +449,16 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 WorkerDayCard(aw, rowOf(aw), currencies, workEditable) { nr ->
                     val old = rowOf(aw)
                     val pc = nr.payCur(aw.a)
-                    rows[aw.a.id] = if (pc != old.payCur(aw.a) && pc != aw.a.currency && nr.rate.isBlank())
-                        nr.copy(rate = OfficePolicy.lastRate(ctx, pc, aw.a.currency)?.let { fmtNum(it) } ?: "")
-                    else nr
+                    rows[aw.a.id] = if (pc != old.payCur(aw.a) && pc != aw.a.currency) {
+                        val acc = aw.a.currency
+                        val left = com.alshihab.fieldledger.util.Fx.aOnLeft(fxRates, pc, acc) { c -> decimalsOf(c, currencies) }
+                        val f = com.alshihab.fieldledger.util.Fx.factor(fxRates, pc, acc, date)
+                            ?: OfficePolicy.lastRate(ctx, pc, acc)
+                        nr.copy(
+                            payLeft = left,
+                            rate = f?.let { com.alshihab.fieldledger.util.fmtRate(if (left) it else 1.0 / it) } ?: ""
+                        )
+                    } else nr
                 }
             }
 
@@ -466,7 +480,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
 
             // ================= expenses =================
             if (loaded) item {
-                SectionHeader("المصروفات الأخرى (B2-F)", "${cash.count { it.kind == CashKind.OUT && !it.voided }} قيد", null, null)
+                SectionHeader("المصروفات الأخرى", "${cash.count { it.kind == CashKind.OUT && !it.voided }} قيد", null, null)
             }
             if (loaded) items(cash.filter { it.kind == CashKind.OUT }, key = { "c" + it.key }) { d ->
                 CashDraftCard(projectId, d, currencies, cashEditable,
@@ -480,7 +494,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
             }
 
             if (loaded) item {
-                SectionHeader("المشتريات - مواد / معدات (4F)", "${moves.count { it.type == MoveType.PURCHASE && !it.voided }} سطر", null, null)
+                SectionHeader("المشتريات - مواد / معدات", "${moves.count { it.type == MoveType.PURCHASE && !it.voided }} سطر", null, null)
             }
             if (loaded && purchaseSheet != null) item { LockStatus(moveEditable(MoveType.PURCHASE), purchaseSheet?.createdAt) }
             if (loaded) items(moves.filter { it.type == MoveType.PURCHASE }, key = { "m" + it.key }) { d ->
@@ -510,7 +524,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 }
             }
             if (loaded) item {
-                SectionHeader("مواد منصرفة من المخزن (31F)", "${moves.count { it.type == MoveType.ISSUE && !it.voided }} سطر", null, null)
+                SectionHeader("مواد منصرفة من المخزن", "${moves.count { it.type == MoveType.ISSUE && !it.voided }} سطر", null, null)
             }
             if (loaded && issueSheet != null) item { LockStatus(moveEditable(MoveType.ISSUE), issueSheet?.createdAt) }
             if (loaded) items(moves.filter { it.type == MoveType.ISSUE }, key = { "m" + it.key }) { d ->
@@ -620,7 +634,8 @@ private fun WorkerDayCard(
         }
         if (pc != a.currency) {
             Field(
-                "سعر الصرف: 1 $pc = ؟ ${a.currency}", r.rate, { onChange(r.copy(rate = it)) },
+                if (r.payLeft) "سعر الصرف: 1 $pc = ؟ ${a.currency}" else "سعر الصرف: 1 ${a.currency} = ؟ $pc",
+                r.rate, { onChange(r.copy(rate = it)) },
                 keyboard = KeyboardType.Decimal, enabled = editable,
                 isError = (Money.parse(r.withdrawn) ?: 0L) > 0 && (parseDecimal(r.rate) ?: 0.0) <= 0.0
             )

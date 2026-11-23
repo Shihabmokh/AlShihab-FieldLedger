@@ -138,6 +138,137 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
         }
     }
 
+    // ---------- worker settlement (تصفية حساب) ----------
+    class SettleItem(
+        val assignmentId: Long,
+        val accountAmount: Long,
+        val payCurrency: String,
+        val payAmount: Long,
+        val factor: Double,
+        val note: String,
+        val deactivate: Boolean
+    )
+
+    /** Pays out each worker's remaining balance (in the agreement currency) and records it on today's settlement sheet. Returns attendance ids. */
+    suspend fun settleWorkers(projectId: Long, items: List<SettleItem>): List<Long> = db.withTransaction {
+        val date = Dates.today()
+        val sheet = getOrCreateSheet(projectId, Forms.SETTLE, date)
+        val existing = dao.attendanceForSheet(sheet.id).map { it.assignmentId }.toSet()
+        items.map { it ->
+            val a = dao.assignment(it.assignmentId) ?: throw IllegalStateException("worker")
+            if (it.assignmentId in existing) throw DuplicateException("تمت تصفية حساب أحد العمال المحددين اليوم مسبقاً")
+            val id = dao.insertAttendance(
+                Attendance(
+                    sheetId = sheet.id, projectId = projectId, assignmentId = it.assignmentId, date = date,
+                    currency = a.currency, status = Status.SETTLE, due = 0, withdrawn = it.accountAmount,
+                    workNote = it.note, updatedAt = now(), payCurrency = it.payCurrency, payAmount = it.payAmount, rate = it.factor
+                )
+            )
+            if (it.deactivate && a.active) dao.updateAssignment(a.copy(active = false))
+            audit(
+                "تصفية", "حساب عامل", it.assignmentId,
+                "صُرف ${Money.fmt(it.accountAmount)} ${a.currency} (دُفع ${Money.fmt(it.payAmount)} ${it.payCurrency})" +
+                    if (it.deactivate) " وأُنهي عمله" else ""
+            )
+            id
+        }
+    }
+
+    // ---------- corrections for locked statements ----------
+    /** Worker correction: signed deltas in the account currency, recorded on today's correction sheet. */
+    suspend fun addWorkerCorrection(projectId: Long, assignmentId: Long, dueDelta: Long, withdrawnDelta: Long, reason: String) = db.withTransaction {
+        val a = dao.assignment(assignmentId) ?: return@withTransaction
+        val date = Dates.today()
+        val sheet = getOrCreateSheet(projectId, Forms.CORRECT, date)
+        val old = dao.attendanceForSheet(sheet.id).firstOrNull { it.assignmentId == assignmentId }
+        if (old == null) {
+            dao.insertAttendance(
+                Attendance(
+                    sheetId = sheet.id, projectId = projectId, assignmentId = assignmentId, date = date, currency = a.currency,
+                    status = Status.CORRECTION, due = dueDelta, withdrawn = withdrawnDelta, workNote = "تصحيح: $reason",
+                    updatedAt = now(), payCurrency = a.currency, payAmount = withdrawnDelta, rate = 1.0
+                )
+            )
+        } else {
+            dao.updateAttendance(
+                old.copy(
+                    due = old.due + dueDelta, withdrawn = old.withdrawn + withdrawnDelta, payAmount = old.payAmount + withdrawnDelta,
+                    workNote = old.workNote + " | تصحيح: " + reason, updatedAt = now()
+                )
+            )
+        }
+        audit("قيد تصحيحي", "حساب عامل", assignmentId, "المستحق ${Money.fmt(dueDelta)}، المسحوب ${Money.fmt(withdrawnDelta)} ${a.currency} - السبب: $reason")
+    }
+
+    // ---------- tamper-evident seals ----------
+    private fun sha(s: String) = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    /** Canonical text of a sheet and all its lines (explicit fields so future columns never change old hashes). */
+    private suspend fun sheetContent(sh: Sheet): String {
+        val sb = StringBuilder("S|${sh.id}|${sh.projectId}|${sh.form}|${sh.date}|${sh.serial}|${sh.createdAt}\n")
+        dao.attendanceForSheet(sh.id).sortedBy { it.id }.forEach {
+            sb.append("A|${it.id}|${it.assignmentId}|${it.status}|${it.overtimeHours}|${it.due}|${it.withdrawn}|${it.currency}|${it.payCurrency}|${it.payAmount}|${it.rate}|${it.workNote}\n")
+        }
+        dao.cashForSheet(sh.id).forEach {
+            sb.append("C|${it.id}|${it.kind}|${it.category}|${it.currency}|${it.amount}|${it.docType}|${it.docNo}|${it.description}|${it.voided}|${it.correctionOf}|${it.reason}\n")
+        }
+        dao.movesForSheet(sh.id).forEach {
+            sb.append("M|${it.id}|${it.materialId}|${it.type}|${it.qty}|${it.unitPrice}|${it.total}|${it.currency}|${it.shop}|${it.docNo}|${it.site}|${it.person}|${it.details}|${it.voided}\n")
+        }
+        return sb.toString()
+    }
+
+    /** Seals every sheet whose 24h window has closed, chaining each hash to the previous seal. */
+    suspend fun sealLockedSheets(): Int = db.withTransaction {
+        if (!TimeGuard.clockOk(ctx)) return@withTransaction 0
+        val sealed = dao.seals().map { it.sheetId }.toSet()
+        var last = dao.lastSeal()
+        var n = 0
+        dao.allSheets()
+            .filter { it.id !in sealed && System.currentTimeMillis() - it.createdAt >= TimeGuard.EDIT_WINDOW_MS }
+            .sortedWith(compareBy({ it.createdAt }, { it.id }))
+            .forEach { sh ->
+                val prev = last?.hash ?: "GENESIS"
+                val seal = SheetSeal(sh.id, (last?.seq ?: 0) + 1, prev, sha(prev + "\n" + sheetContent(sh)), now())
+                dao.insertSeal(seal)
+                last = seal
+                n++
+            }
+        n
+    }
+
+    class SealReport(val total: Int, val broken: List<Pair<Sheet?, String>>)
+
+    /** Recomputes the whole chain; any edit to a sealed sheet (e.g. on a rooted phone) shows up here. */
+    suspend fun verifySeals(): SealReport {
+        val sheets = dao.allSheets().associateBy { it.id }
+        val seals = dao.seals()
+        val broken = mutableListOf<Pair<Sheet?, String>>()
+        var prev = "GENESIS"
+        for (seal in seals) {
+            val sh = sheets[seal.sheetId]
+            when {
+                sh == null -> broken += null to "كشف مختوم مفقود (رقم ${seal.sheetId})"
+                seal.prevHash != prev -> broken += sh to "انقطاع في سلسلة البصمات"
+                sha(prev + "\n" + sheetContent(sh)) != seal.hash -> broken += sh to "محتوى الكشف تغيّر بعد قفله"
+            }
+            prev = seal.hash
+        }
+        if (broken.isNotEmpty()) logEvent("تنبيه أمني", "فشل التحقق من ${broken.size} كشف مختوم")
+        return SealReport(seals.size, broken)
+    }
+
+    // ---------- raw database access for backup / restore ----------
+    fun rawDb() = db.openHelper.writableDatabase
+
+    // ---------- exchange rates ----------
+    suspend fun addFx(f: FxRate): Long = db.withTransaction {
+        val id = dao.insertFx(f.copy(createdAt = now()))
+        audit("إنشاء", "سعر صرف", id, "1 ${f.fromCur} = ${f.rate} ${f.toCur} من ${f.date}")
+        id
+    }
+
     // ---------- persons ----------
     suspend fun addPerson(p: Person): Long = db.withTransaction {
         val id = dao.insertPerson(p.copy(createdAt = now()))

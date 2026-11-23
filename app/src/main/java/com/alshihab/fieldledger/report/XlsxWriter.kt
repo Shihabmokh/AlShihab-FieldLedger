@@ -59,11 +59,13 @@ object XlsxWriter {
         }
     }
 
-    fun write(d: ReportDoc, hash: String, exportedText: String, out: File) {
+    fun write(d: ReportDoc, @Suppress("UNUSED_PARAMETER") hash: String, exportedText: String, out: File) = writeBook(listOf(d), exportedText, out)
+
+    private fun sheetXml(d: ReportDoc, exportedText: String): String {
         val sh = Sheet()
         val width = maxOf(6, d.sections.maxOfOrNull { it.columns.size } ?: 6)
         sh.row(listOf("مكتب الشهاب للمقاولات العامة" to 1), height = 24); sh.mergeRow(width)
-        sh.row(listOf("${d.title} - نموذج رقم (${d.formNo})" to 1), height = 22); sh.mergeRow(width)
+        sh.row(listOf(d.title to 1), height = 22); sh.mergeRow(width)
         d.headerLines().forEach { (k, v) -> sh.row(listOf(k to 6, v to 0)) }
         sh.row(listOf("تاريخ ووقت التصدير" to 6, exportedText to 0))
         sh.row(emptyList())
@@ -77,8 +79,6 @@ object XlsxWriter {
             sh.row(emptyList())
         }
         d.signatures.forEach { (role, name) -> sh.row(listOf(role to 6, name to 0, "التوقيع:" to 0)) }
-        sh.row(emptyList())
-        sh.row(listOf("بصمة التحقق SHA-256" to 6, hash to 0))
 
         val cols = StringBuilder("<cols>")
         for (i in 0 until maxOf(width, sh.maxCols)) cols.append("<col min=\"${i + 1}\" max=\"${i + 1}\" width=\"${if (i == 1) 28 else 16}\" customWidth=\"1\"/>")
@@ -86,26 +86,43 @@ object XlsxWriter {
         val merges = if (sh.merges.isEmpty()) "" else
             "<mergeCells count=\"${sh.merges.size}\">" + sh.merges.joinToString("") { "<mergeCell ref=\"$it\"/>" } + "</mergeCells>"
         val orientation = if (d.landscape) "landscape" else "portrait"
-        val sheetName = esc(d.formNo.map { ch -> if (ch in "[]:*?/\\") '-' else ch }.joinToString("").take(28))
 
         val sheetXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetViews><sheetView rightToLeft="1" workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="18"/>$cols<sheetData>${sh.rows}</sheetData>$merges<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="$orientation" fitToWidth="1" fitToHeight="0"/></worksheet>"""
 
+        return sheetXml
+    }
+
+    fun writeBook(docs: List<ReportDoc>, exportedText: String, out: File) {
+        val names = mutableSetOf<String>()
+        val sheetNames = docs.map { d ->
+            var base = d.title.map { ch -> if (ch in "[]:*?/\\") '-' else ch }.joinToString("").take(28)
+            var n = base; var k = 2
+            while (!names.add(n)) { n = base.take(25) + " " + k; k++ }
+            esc(n)
+        }
         val styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0"/><numFmt numFmtId="165" formatCode="#,##0.00"/></numFmts><fonts count="4"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="14"/><color rgb="FF14228F"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FF0F196E"/><name val="Arial"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0F196E"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFDDE1F7"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF9A9BAD"/></left><right style="thin"><color rgb="FF9A9BAD"/></right><top style="thin"><color rgb="FF9A9BAD"/></top><bottom style="thin"><color rgb="FF9A9BAD"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="9"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="164" fontId="3" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="165" fontId="3" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"""
 
-        val files = linkedMapOf(
+        val sheetOverrides = docs.indices.joinToString("") { i ->
+            "<Override PartName=\"/xl/worksheets/sheet${i + 1}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        }
+        val sheetsXml = docs.indices.joinToString("") { i -> "<sheet name=\"${sheetNames[i]}\" sheetId=\"${i + 1}\" r:id=\"rId${i + 1}\"/>" }
+        val sheetRels = docs.indices.joinToString("") { i ->
+            "<Relationship Id=\"rId${i + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet${i + 1}.xml\"/>"
+        }
+        val files = linkedMapOf<String, String>(
             "[Content_Types].xml" to """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>""",
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>$sheetOverrides<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>""",
             "_rels/.rels" to """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>""",
             "xl/workbook.xml" to """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="$sheetName" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>$sheetsXml</sheets></workbook>""",
             "xl/_rels/workbook.xml.rels" to """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>""",
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">$sheetRels<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>""",
             "xl/styles.xml" to styles,
-            "xl/worksheets/sheet1.xml" to sheetXml
         )
+        docs.forEachIndexed { i, d -> files["xl/worksheets/sheet${i + 1}.xml"] = sheetXml(d, exportedText) }
         ZipOutputStream(out.outputStream()).use { zip ->
             files.forEach { (name, content) ->
                 zip.putNextEntry(ZipEntry(name))

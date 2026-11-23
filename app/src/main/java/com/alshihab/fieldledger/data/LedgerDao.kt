@@ -295,6 +295,53 @@ interface LedgerDao {
     @Query("SELECT * FROM attendance WHERE assignmentId = :assignmentId ORDER BY date")
     suspend fun attendanceForAssignmentList(assignmentId: Long): List<Attendance>
 
+    // ---------- exchange rates ----------
+    @Query("SELECT * FROM fx_rates ORDER BY date DESC, id DESC")
+    fun fxRates(): Flow<List<FxRate>>
+
+    @Query("SELECT * FROM fx_rates ORDER BY date DESC, id DESC")
+    suspend fun fxRatesList(): List<FxRate>
+
+    @Insert
+    suspend fun insertFx(f: FxRate): Long
+
+    // ---------- seals ----------
+    @Query("SELECT * FROM sheets ORDER BY id")
+    suspend fun allSheets(): List<Sheet>
+
+    @Query("SELECT * FROM sheet_seals ORDER BY seq")
+    suspend fun seals(): List<SheetSeal>
+
+    @Query("SELECT * FROM sheet_seals ORDER BY seq DESC LIMIT 1")
+    suspend fun lastSeal(): SheetSeal?
+
+    @Insert
+    suspend fun insertSeal(s: SheetSeal)
+
+    @Query("SELECT COUNT(*) FROM sheet_seals")
+    fun sealCount(): Flow<Int>
+
+    @Query("SELECT * FROM cash_entries WHERE sheetId = :sheetId ORDER BY id")
+    suspend fun cashForSheet(sheetId: Long): List<CashEntry>
+
+    @Query("SELECT * FROM material_moves WHERE sheetId = :sheetId ORDER BY id")
+    suspend fun movesForSheet(sheetId: Long): List<MaterialMove>
+
+    @Query("SELECT * FROM attachments WHERE projectId = :projectId ORDER BY id")
+    suspend fun attachmentsForProject(projectId: Long): List<Attachment>
+
+    @Query("SELECT * FROM attachments ORDER BY id")
+    suspend fun allAttachments(): List<Attachment>
+
+    @Query("SELECT * FROM attendance WHERE id = :id")
+    suspend fun attendanceById(id: Long): Attendance?
+
+    @Query("SELECT * FROM attachments WHERE entity = :entity AND entityId = :entityId ORDER BY id")
+    suspend fun attachmentsList(entity: String, entityId: Long): List<Attachment>
+
+    @Query("SELECT COUNT(*) FROM projects")
+    suspend fun projectCount(): Int
+
     // ---------- audit ----------
     @Insert
     suspend fun insertAudit(a: AuditLog): Long

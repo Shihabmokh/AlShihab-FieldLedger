@@ -28,12 +28,18 @@ enum class ReportKind(val formNo: String, val title: String, val needsPeriod: Bo
     EQUIPMENT("EQ", "كشف توريد وإرجاع معدات العمل"),
     T24("24T", "كشف مستحقات العمال الأساسيين"),
     T25("25T", "كشف صرف مستحقات العمال المؤقتين"),
+    CONSOLIDATED("CON", "التقرير الموحد بالعملة الأساسية"),
     STATEMENT("WS", "كشف حساب عامل", false)
 }
 
 private val OUT_CATS = listOf("بترول", "ديزل", "تغذية", "صيانة", "مواصلات واتصالات", "تسهيلات", "مصاريف أخرى")
 
-class ReportBuilder(private val dao: LedgerDao, private val appVersion: String) {
+class ReportBuilder(
+    private val dao: LedgerDao,
+    private val appVersion: String,
+    /** decrypts an attachment (storedName, sha256) → bytes, or null */
+    private val loadAttachment: (String, String) -> ByteArray? = { _, _ -> null }
+) {
     private lateinit var cur: List<CurrencyEntity>
 
     private fun dec(code: String) = cur.firstOrNull { it.code == code }?.decimals ?: 2
@@ -60,6 +66,7 @@ class ReportBuilder(private val dao: LedgerDao, private val appVersion: String) 
             ReportKind.EQUIPMENT -> stock(p, from, to, ItemKind.EQUIPMENT)
             ReportKind.T24 -> dues(p, from, to, WorkerCategory.BASIC)
             ReportKind.T25 -> dues(p, from, to, WorkerCategory.TEMP)
+            ReportKind.CONSOLIDATED -> consolidated(p, from, to)
             ReportKind.STATEMENT -> statement(p, extraId)
         }
     }
@@ -115,6 +122,8 @@ class ReportBuilder(private val dao: LedgerDao, private val appVersion: String) 
         Status.PRESENT -> "حاضر"
         Status.HALF -> "نصف يوم"
         Status.ABSENT -> "غائب"
+        Status.SETTLE -> "تصفية حساب"
+        Status.CORRECTION -> "قيد تصحيحي"
         else -> "مقاولة"
     }
 
@@ -175,10 +184,10 @@ class ReportBuilder(private val dao: LedgerDao, private val appVersion: String) 
             lines += Line(e.date, e.category, if (e.kind == CashKind.IN) e.amount else 0, if (e.kind == CashKind.OUT) e.amount else 0, e.currency, e.docType, e.docNo, e.description)
         }
         att.groupBy { it.date to it.payCurrency.ifBlank { it.currency } }.forEach { (k, list) ->
-            lines += Line(k.first, "مسحوبات العمال (كشف 3F)", 0, list.sumOf { it.payAmount }, k.second, "كشف 3F", "", "${list.size} عامل")
+            lines += Line(k.first, "مسحوبات العمال", 0, list.sumOf { it.payAmount }, k.second, "كشف المسحوبات", "", "${list.size} عامل")
         }
         pur.groupBy { it.date to it.currency }.forEach { (k, list) ->
-            lines += Line(k.first, "مشتريات مواد / معدات (كشف 4F)", 0, list.sumOf { it.total }, k.second, "كشف 4F", "", "${list.size} سطر")
+            lines += Line(k.first, "مشتريات مواد / معدات", 0, list.sumOf { it.total }, k.second, "كشف المشتريات", "", "${list.size} سطر")
         }
         lines.sortBy { it.date }
         val inT = mutableMapOf<String, Long>(); val outT = mutableMapOf<String, Long>()
@@ -215,8 +224,8 @@ class ReportBuilder(private val dao: LedgerDao, private val appVersion: String) 
         return doc(
             ReportKind.CASH, p, from, to,
             listOf(
-                Section("كشف حركة الصندوق اليومية (A2-F)", cols, data, totals, notes),
-                Section("كشف حركة المصروفات الأخرى (B2-F)", bCols, bRows, bTot)
+                Section("كشف حركة الصندوق اليومية", cols, data, totals, notes),
+                Section("كشف حركة المصروفات الأخرى", bCols, bRows, bTot)
             ),
             true
         )
@@ -448,14 +457,82 @@ class ReportBuilder(private val dao: LedgerDao, private val appVersion: String) 
         val totals = listOf(listOf("", "", "", "الإجمالي", fmtNum(rows.sumOf { it.overtimeHours }), amt(due, c), amt(wd, c), "", amt(bal, c), ""))
         val first = rows.firstOrNull()?.date ?: Dates.today()
         val last = rows.lastOrNull()?.date ?: Dates.today()
+        val settle = rows.lastOrNull { it.status == Status.SETTLE }
+        val sig = settle?.let { st ->
+            dao.attachmentsList("settle", st.id).firstOrNull()?.let { a -> loadAttachment(a.storedName, a.sha256) }
+        }
+        val declaration = settle?.let { st ->
+            val paid = if (st.payCurrency.isNotBlank() && st.payCurrency != c) "${amt(st.payAmount, st.payCurrency)} ${cname(st.payCurrency)} (تعادل ${amt(st.withdrawn, c)} ${cname(c)})"
+            else "${amt(st.withdrawn, c)} ${cname(c)}"
+            "أقر أنا العامل/ ${aw.worker.name}، رقم الكرت (${a.cardNo})، بأنني استلمت بتاريخ ${st.date} مبلغ $paid، " +
+                "وهو صافي مستحقاتي عن عملي في مشروع ${p.name} من $first إلى ${st.date}، وبذلك تمت تصفية حسابي ولا يحق لي المطالبة بأي مبالغ أخرى عن هذه الفترة."
+        }
         return ReportDoc(
-            ReportKind.STATEMENT.formNo, ReportKind.STATEMENT.title, p, period(first, last),
+            ReportKind.STATEMENT.formNo, if (settle != null) "كشف تصفية حساب عامل (مخالصة)" else ReportKind.STATEMENT.title, p, period(first, last),
             listOf(Section(null, cols, data, totals, if (contract) listOf("المبلغ المتفق عليه" to amt(a.contractAmount, c), "المتبقي من المقاولة" to amt(bal, c)) else listOf("المتبقي للعامل" to amt(bal, c)))),
             listOf(
                 "اسم العامل" to aw.worker.name, "رقم الكرت" to "${a.cardNo}", "المهنة" to aw.worker.profession,
                 "الهاتف" to aw.worker.phone, "الاتفاق" to (if (contract) "مقاولة" else "يومية ${amt(a.dailyWage, c)}"), "عملة الحساب" to cname(c)
             ),
-            true, appVersion = appVersion
+            true,
+            signatures = if (settle != null) listOf(
+                "العامل (المستلم)" to aw.worker.name,
+                "المحاسب الميداني" to p.accountantName,
+                "المشرف الميداني" to p.supervisorName
+            ) else listOf(
+                "المحاسب الميداني" to p.accountantName,
+                "المشرف الميداني (الفني المقيم)" to p.supervisorName,
+                "المهندس / مدير المشروع" to p.engineerName
+            ),
+            appVersion = appVersion,
+            declaration = declaration,
+            signatureImage = sig
         )
+    }
+
+    // ------------------------------------------------------------------ consolidated (base currency)
+    private suspend fun consolidated(p: Project, from: String, to: String): ReportDoc {
+        val fx = dao.fxRatesList()
+        val base = p.baseCurrency
+        val cashE = dao.cashBetween(p.id, from, to).filter { !it.voided }
+        val att = dao.attendanceBetween(p.id, from, to).filter { it.payAmount != 0L }
+        val pur = dao.movesBetween(p.id, from, to).filter { it.type == MoveType.PURCHASE && !it.voided }
+        val carried = mutableMapOf<String, Long>()
+        dao.cashBefore(p.id, from).forEach { addTo(carried, it.currency, if (it.kind == CashKind.IN) it.amount else -it.amount) }
+        dao.attendanceBefore(p.id, from).forEach { if (it.payAmount != 0L) addTo(carried, it.payCurrency.ifBlank { it.currency }, -it.payAmount) }
+        dao.movesBefore(p.id, from).filter { it.type == MoveType.PURCHASE }.forEach { addTo(carried, it.currency, -it.total) }
+        val codes = (cashE.map { it.currency } + att.map { it.payCurrency.ifBlank { it.currency } } + pur.map { it.currency } + carried.keys).toSortedSet()
+        val cols = listOf(
+            Col("العملة", 1.1f), Col("الرصيد المرحّل", 1f, true), Col("المقبوضات", 1f, true), Col("مسحوبات العمال", 1f, true),
+            Col("المواد المشتراة", 1f, true), Col("المصروفات الأخرى", 1f, true), Col("الرصيد", 1f, true),
+            Col("سعر الصرف المعتمد", 1.2f), Col("الرصيد بـ $base", 1.1f, true), Col("المدفوعات بـ $base", 1.1f, true)
+        )
+        var totBal = 0.0
+        var totPay = 0.0
+        val missing = mutableListOf<String>()
+        val rows = codes.map { c ->
+            val cb = carried[c] ?: 0L
+            val inA = cashE.filter { it.currency == c && it.kind == CashKind.IN }.sumOf { it.amount }
+            val oth = cashE.filter { it.currency == c && it.kind == CashKind.OUT }.sumOf { it.amount }
+            val w = att.filter { it.payCurrency.ifBlank { it.currency } == c }.sumOf { it.payAmount }
+            val pu = pur.filter { it.currency == c }.sumOf { it.total }
+            val bal = cb + inA - w - pu - oth
+            val f = com.alshihab.fieldledger.util.Fx.factor(fx, c, base, to)
+            if (f == null) missing += c else { totBal += bal * f; totPay += (w + pu + oth) * f }
+            val rateText = when {
+                f == null -> "لا يوجد سعر"
+                c == base -> "—"
+                f >= 1.0 -> "1 $c = ${com.alshihab.fieldledger.util.fmtRate(f)} $base"
+                else -> "1 $base = ${com.alshihab.fieldledger.util.fmtRate(1.0 / f)} $c"
+            }
+            listOf(
+                "${cname(c)} ($c)", amt(cb, c), amt(inA, c), amt(w, c), amt(pu, c), amt(oth, c), amt(bal, c), rateText,
+                f?.let { amt(Math.round(bal * it), base) } ?: "—", f?.let { amt(Math.round((w + pu + oth) * it), base) } ?: "—"
+            )
+        }
+        val totals = listOf(listOf("الإجمالي بـ $base", "", "", "", "", "", "", "", amt(Math.round(totBal), base), amt(Math.round(totPay), base)))
+        val notes = if (missing.isEmpty()) listOf("أسعار الصرف" to "المعتمدة بتاريخ $to")
+        else listOf("تنبيه" to "لا يوجد سعر صرف إلى $base للعملات: ${missing.joinToString("، ")} - أضفه من الإعدادات ← أسعار الصرف")
+        return doc(ReportKind.CONSOLIDATED, p, from, to, listOf(Section(null, cols, rows, totals, notes)), true, listOf("العملة الأساسية" to cname(base)))
     }
 }

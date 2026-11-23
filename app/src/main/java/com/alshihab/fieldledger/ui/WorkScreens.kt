@@ -144,35 +144,26 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
                 if (isNew) TextButton(onClick = { nav.navigate(Routes.workerForm(0)) }) {
                     Icon(Icons.Filled.PersonAdd, null); Text("  عامل غير موجود؟ أضفه للسجل أولاً")
                 }
-                Text("تصنيف العامل (للكشوفات 24T / 25T)", style = MaterialTheme.typography.bodySmall)
+                Text("تصنيف العامل (لكشوف المستحقات: أساسي / مؤقت)", style = MaterialTheme.typography.bodySmall)
                 Choice(listOf(WorkerCategory.BASIC to "أساسي", WorkerCategory.TEMP to "مؤقت"), category, { category = it })
             }
             SectionCard("طريقة الأجر") {
                 Choice(listOf(PayType.DAILY to "يومية", PayType.CONTRACT to "مقاولة"), payType, { payType = it })
-                val fromList = payType == PayType.DAILY && wageFromList
-                if (payType == PayType.DAILY) {
-                    Text("مصدر الأجر اليومي", style = MaterialTheme.typography.bodySmall)
-                    Choice(
-                        listOf("LIST" to "من قائمة أجور المكتب", "MANUAL" to "إدخال يدوي"),
-                        if (wageFromList) "LIST" else "MANUAL",
-                        { if (it == "LIST") wageFromList = true else if (manualAllowed) { wageFromList = false; rateId = 0L } }
-                    )
-                    if (!manualAllowed) Text(
-                        "الإدخال اليدوي للأجر غير مسموح من المكتب. اختر من قائمة الأجور.",
-                        style = MaterialTheme.typography.bodySmall, color = Bad
-                    )
+                val selWorker = workers.firstOrNull { it.id == workerId }
+                val profRate = selWorker?.let { w -> wageRates.firstOrNull { it.active && it.title.trim() == w.profession.trim() } }
+                val fromList = payType == PayType.DAILY && profRate != null
+                androidx.compose.runtime.LaunchedEffect(profRate?.id, payType) {
+                    if (payType == PayType.DAILY && profRate != null) {
+                        rateId = profRate.id; currency = profRate.currency
+                        wage = Money.toInput(profRate.dailyWage); otRate = Money.toInput(profRate.overtimeRate)
+                        wageFromList = true
+                    } else if (payType == PayType.DAILY && selWorker != null) {
+                        rateId = 0L; wageFromList = false
+                    }
                 }
-                if (fromList) {
-                    val activeRates = wageRates.filter { it.active || it.id == rateId }
-                    if (activeRates.isEmpty()) Banner("لم يحدد المكتب قائمة الأجور بعد (الإعدادات ← إعدادات المكتب)", Bad)
-                    DropdownField(
-                        "الأجر حسب قائمة المكتب *", activeRates, activeRates.firstOrNull { it.id == rateId },
-                        { "${it.title} - ${money(it.dailyWage, it.currency, currencies)}" },
-                        { r ->
-                            rateId = r.id; currency = r.currency
-                            wage = Money.toInput(r.dailyWage); otRate = Money.toInput(r.overtimeRate)
-                        }
-                    )
+                if (payType == PayType.DAILY && selWorker != null) {
+                    if (profRate != null) Banner("الأجر محدد من المكتب لمهنة «${profRate.title}»", Good)
+                    else if (!manualAllowed) Banner("لم يحدد المكتب أجراً لمهنة «${selWorker.profession}». عدّل مهنة العامل في سجل العمال.", Bad)
                 }
                 DropdownField(
                     "عملة حساب العامل", currencies, currencies.firstOrNull { it.code == currency },
@@ -207,8 +198,7 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
                     val prog = com.alshihab.fieldledger.util.normalizeDigits(progress).trim().ifEmpty { "0" }.toIntOrNull()
                     error = when {
                         workerId == 0L -> "اختر العامل"
-                        payType == PayType.DAILY && wageFromList && rateId == 0L -> "اختر الأجر من قائمة المكتب"
-                        payType == PayType.DAILY && !wageFromList && !manualAllowed -> "الإدخال اليدوي غير مسموح"
+                        payType == PayType.DAILY && !wageFromList && !manualAllowed -> "لا يوجد أجر محدد من المكتب لمهنة هذا العامل"
                         payType == PayType.DAILY && (w == null || w <= 0) -> "أدخل أجراً يومياً صحيحاً"
                         payType == PayType.DAILY && ot == null -> "سعر الساعة الإضافية غير صحيح"
                         payType == PayType.DAILY && (hours == null || hours !in 1..24) -> "ساعات العمل غير صحيحة"
@@ -254,9 +244,18 @@ internal data class RowState(
     val note: String = "",
     /** currency paid from the cash box; blank = the worker's account currency */
     val payCurrency: String = "",
-    /** 1 unit of payCurrency = rate units of the account currency */
-    val rate: String = ""
+    /** displayed exchange rate (see [payLeft]) */
+    val rate: String = "",
+    /** true: "1 payCurrency = rate account"; false: "1 account = rate payCurrency" (e.g. 1 USD = 530 YER) */
+    val payLeft: Boolean = true
 )
+
+/** units of the account currency per 1 unit of the paid currency */
+internal fun RowState.factor(): Double? {
+    val r = parseDecimal(rate) ?: return null
+    if (r <= 0.0) return null
+    return if (payLeft) r else 1.0 / r
+}
 
 internal fun RowState.payCur(a: Assignment) = payCurrency.ifBlank { a.currency }
 
@@ -264,9 +263,8 @@ internal fun RowState.payCur(a: Assignment) = payCurrency.ifBlank { a.currency }
 internal fun RowState.accountWithdrawn(a: Assignment): Long? {
     val paid = Money.parse(withdrawn) ?: return null
     if (payCur(a) == a.currency || paid == 0L) return paid
-    val r = parseDecimal(rate) ?: return null
-    if (r <= 0.0) return null
-    return Math.round(paid * r)
+    val f = factor() ?: return null
+    return Math.round(paid * f)
 }
 
 internal fun defaultRow(a: Assignment) =
@@ -306,6 +304,8 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
     val days = rows.sumOf { if (it.status == Status.PRESENT) 1.0 else if (it.status == Status.HALF) 0.5 else 0.0 }
     val ot = rows.sumOf { it.overtimeHours }
     val contract = a.payType == PayType.CONTRACT
+    var correcting by remember { mutableStateOf(false) }
+    if (correcting) WorkerCorrectionDialog(a.projectId, a.id, c, currencies) { correcting = false }
 
     Scaffold(topBar = {
         AppBar("كشف حساب: ${cur.worker.name}", onBack = { nav.popBackStack() }, actions = {
@@ -360,6 +360,16 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
                     }
                 }
             }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { nav.navigate(Routes.settle(a.projectId, a.id)) }, modifier = Modifier.weight(1f)) {
+                        Text("تصفية الحساب")
+                    }
+                    OutlinedButton(onClick = { correcting = true }, modifier = Modifier.weight(1f)) {
+                        Text("قيد تصحيحي")
+                    }
+                }
+            }
             item { Text("الحركة اليومية", fontWeight = FontWeight.Bold, color = Brand) }
             if (rows.isEmpty()) item { EmptyState("لا توجد حركة بعد") }
             var running = 0L
@@ -381,6 +391,8 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
                                 Status.PRESENT -> "حاضر"
                                 Status.HALF -> "نصف يوم"
                                 Status.ABSENT -> "غائب"
+                                Status.SETTLE -> "تصفية حساب"
+                                Status.CORRECTION -> "قيد تصحيحي"
                                 else -> "مقاولة"
                             }
                         )
@@ -388,7 +400,12 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
                     if (!contract) KeyValue("المستحق", money(r.due, c, currencies) + if (r.overtimeHours > 0) "  (+${fmtNum(r.overtimeHours)} س)" else "")
                     KeyValue("المسحوب", money(r.withdrawn, c, currencies))
                     if (r.payCurrency.isNotBlank() && r.payCurrency != c && r.payAmount != 0L)
-                        Text("دُفع ${money(r.payAmount, r.payCurrency, currencies)} بسعر صرف ${fmtNum(r.rate)}", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "دُفع ${money(r.payAmount, r.payCurrency, currencies)} • " +
+                                if (r.rate >= 1.0) "1 ${r.payCurrency} = ${com.alshihab.fieldledger.util.fmtRate(r.rate)} $c"
+                                else "1 $c = ${com.alshihab.fieldledger.util.fmtRate(1.0 / r.rate)} ${r.payCurrency}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     KeyValue(if (contract) "المتبقي من المقاولة" else "الرصيد التراكمي", money(if (contract) a.contractAmount + bal else bal, c, currencies), bold = true)
                     if (r.workNote.isNotBlank()) Text(r.workNote, style = MaterialTheme.typography.bodySmall)
                 }

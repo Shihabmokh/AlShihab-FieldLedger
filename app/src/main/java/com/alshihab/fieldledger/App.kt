@@ -32,5 +32,7 @@ class App : Application() {
         System.loadLibrary("sqlcipher")
         Graph.init(this)
         com.alshihab.fieldledger.security.AttachmentStore.cleanCache(this)
+        // seal statements whose 24h window has closed (tamper-evident hash chain)
+        Graph.scope.launch { runCatching { Graph.repo.sealLockedSheets() } }
     }
 }

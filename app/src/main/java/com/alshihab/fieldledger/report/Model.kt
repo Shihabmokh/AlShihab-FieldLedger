@@ -14,6 +14,9 @@ data class Section(
     val notes: List<Pair<String, String>> = emptyList()
 )
 
+/** A picture or PDF printed after the report (invoices, transfer notices, signatures). */
+class Appendix(val title: String, val mime: String, val bytes: ByteArray)
+
 data class ReportDoc(
     val formNo: String,
     val title: String,
@@ -28,7 +31,12 @@ data class ReportDoc(
         "المهندس / مدير المشروع" to project.engineerName
     ),
     val exportedAt: Long = System.currentTimeMillis(),
-    val appVersion: String = ""
+    val appVersion: String = "",
+    /** paragraph printed above the signatures (e.g. the worker's settlement acknowledgement) */
+    val declaration: String? = null,
+    /** PNG of a signature drawn on the phone, printed in the first signature box */
+    val signatureImage: ByteArray? = null,
+    val appendix: List<Appendix> = emptyList()
 ) {
     fun headerLines(): List<Pair<String, String>> = listOfNotNull(
         "اسم المشروع" to project.name,
@@ -58,5 +66,5 @@ data class ReportDoc(
     }
 
     fun qrText(hash: String, exportedText: String) =
-        "AL-SHIHAB FIELD LEDGER\nنموذج: $formNo\nالمشروع: ${project.name}\nالفترة: $period\nالتصدير: $exportedText\nSHA256: $hash"
+        "AL-SHIHAB FIELD LEDGER\nالكشف: $title\nالمشروع: ${project.name}\nالفترة: $period\nالتصدير: $exportedText\nSHA256: $hash"
 }

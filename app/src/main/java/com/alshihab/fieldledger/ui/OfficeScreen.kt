@@ -151,13 +151,13 @@ private fun OfficeContent() {
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("قائمة الأجور اليومية", fontWeight = FontWeight.Bold, color = Brand, modifier = Modifier.weight(1f))
+                Text("أجور المهن اليومية", fontWeight = FontWeight.Bold, color = Brand, modifier = Modifier.weight(1f))
                 Button(onClick = { adding = true }) { Icon(Icons.Filled.Add, null); Text(" أجر جديد") }
             }
         }
         item {
             Text(
-                "تعديل أجر في القائمة يُطبَّق على كل العمال المرتبطين به من اليوم فصاعداً، ولا يغيّر الأيام المحفوظة سابقاً.",
+                "الأجر مرتبط بالمهنة: عند إضافة عامل للمشروع يأخذ أجر مهنته تلقائياً، والمحاسب لا يرى هذه القائمة. تعديل الأجر يُطبَّق على العمال المرتبطين به من اليوم فصاعداً ولا يغيّر الأيام المحفوظة.",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -193,7 +193,7 @@ private fun WageRateDialog(existing: WageRate?, currencies: List<CurrencyEntity>
         title = { Text(if (existing == null) "أجر جديد" else "تعديل الأجر") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Field("المهنة / الوصف *", title, { title = it; error = null })
+                Field("المهنة *", title, { title = it; error = null })
                 DropdownField(
                     "العملة", currencies, currencies.firstOrNull { it.code == currency },
                     { currencyLabel(it) }, { currency = it.code }, enabled = existing == null

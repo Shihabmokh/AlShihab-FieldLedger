@@ -13,9 +13,10 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     entities = [
         Project::class, CurrencyEntity::class, ExchangeRate::class, Worker::class,
         Assignment::class, Sheet::class, Attendance::class, CashEntry::class, AuditLog::class,
-        Material::class, MaterialMove::class, WageRate::class, Person::class, Attachment::class
+        Material::class, MaterialMove::class, WageRate::class, Person::class, Attachment::class,
+        FxRate::class, SheetSeal::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class LedgerDb : RoomDatabase() {
@@ -26,14 +27,14 @@ abstract class LedgerDb : RoomDatabase() {
         private val NO_DELETE = listOf(
             "projects", "workers", "assignments", "sheets",
             "attendance", "cash_entries", "audit_log", "currencies",
-            "materials", "material_moves", "wage_rates", "persons", "attachments"
+            "materials", "material_moves", "wage_rates", "persons", "attachments", "fx_rates", "sheet_seals"
         )
 
         fun build(ctx: Context): LedgerDb {
             val passphrase = DbKeyManager.getPassphrase(ctx)
             return Room.databaseBuilder(ctx, LedgerDb::class.java, "ledger.db")
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         db.execSQL(
@@ -123,6 +124,22 @@ abstract class LedgerDb : RoomDatabase() {
             }
         }
 
+        /** v5: dated exchange rates, cash corrections, sheet seals */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cash_entries ADD COLUMN correctionOf INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE cash_entries ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `fx_rates` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`date` TEXT NOT NULL, `fromCur` TEXT NOT NULL, `toCur` TEXT NOT NULL, `rate` REAL NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `sheet_seals` (`sheetId` INTEGER NOT NULL, `seq` INTEGER NOT NULL, " +
+                        "`prevHash` TEXT NOT NULL, `hash` TEXT NOT NULL, `sealedAt` INTEGER NOT NULL, PRIMARY KEY(`sheetId`))"
+                )
+            }
+        }
+
         private fun installGuards(db: SupportSQLiteDatabase) {
             for (t in NO_DELETE) {
                 db.execSQL(
@@ -130,6 +147,10 @@ abstract class LedgerDb : RoomDatabase() {
                         "BEGIN SELECT RAISE(ABORT, 'delete not allowed'); END"
                 )
             }
+            db.execSQL(
+                "CREATE TRIGGER IF NOT EXISTS guard_no_update_seals BEFORE UPDATE ON sheet_seals " +
+                    "BEGIN SELECT RAISE(ABORT, 'seals are immutable'); END"
+            )
             // audit log is append-only
             db.execSQL(
                 "CREATE TRIGGER IF NOT EXISTS guard_no_update_audit BEFORE UPDATE ON audit_log " +

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.CurrencyExchange
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Password
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -85,7 +86,10 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
 
     var loaded by remember { mutableStateOf(false) }
     var original by remember { mutableStateOf<CashEntry?>(null) }
-    var kind by rememberSaveable { mutableStateOf(kindInit) }
+    val corOf = if (kindInit.startsWith("COR")) kindInit.removePrefix("COR").toLongOrNull() ?: 0L else 0L
+    var kind by rememberSaveable { mutableStateOf(if (corOf != 0L) CashKind.OUT else kindInit) }
+    var reason by rememberSaveable { mutableStateOf("") }
+    var corOriginal by remember { mutableStateOf<CashEntry?>(null) }
     var category by rememberSaveable { mutableStateOf("") }
     var currency by rememberSaveable { mutableStateOf("YER") }
     var amount by rememberSaveable { mutableStateOf("") }
@@ -98,7 +102,13 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
 
     LaunchedEffect(entryId) {
         if (loaded) return@LaunchedEffect
-        if (isNew) {
+        if (isNew && corOf != 0L) {
+            repo.dao.cashEntry(corOf)?.let { o ->
+                corOriginal = o
+                kind = o.kind; category = o.category; currency = o.currency; docType = o.docType
+                description = "تصحيح القيد المؤرخ ${o.date} (${Money.fmt(o.amount)} ${o.currency})"
+            }
+        } else if (isNew) {
             repo.dao.project(projectId)?.let { currency = it.baseCurrency }
             category = if (kind == CashKind.IN) IN_CATEGORIES.first() else OUT_CATEGORIES.first()
             docType = if (kind == CashKind.IN) "سند قبض" else "سند صرف"
@@ -120,7 +130,9 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
         val e = (original ?: CashEntry(sheetId = 0, projectId = projectId, date = date, kind = kind, category = category, currency = currency, amount = amt))
             .copy(
                 kind = kind, category = category, currency = currency, amount = amt,
-                docType = docType, docNo = docNo.trim(), description = description.trim()
+                docType = docType, docNo = docNo.trim(), description = description.trim(),
+                correctionOf = if (isNew) corOf else (original?.correctionOf ?: 0L),
+                reason = if (isNew && corOf != 0L) reason.trim() else (original?.reason ?: "")
             )
         scope.launch {
             try {
@@ -135,7 +147,7 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
 
     Scaffold(topBar = {
         AppBar(
-            (if (kind == CashKind.IN) "قيد قبض" else "قيد صرف") + " - " + date,
+            (if (corOf != 0L) "قيد تصحيحي" else if (kind == CashKind.IN) "قيد قبض" else "قيد صرف") + " - " + date,
             onBack = { nav.popBackStack() }
         )
     }) { pad ->
@@ -148,6 +160,14 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (original?.voided == true) Banner("هذا القيد ملغى", Bad)
+            corOriginal?.let { o ->
+                Banner(
+                    "قيد تصحيحي للقيد المقفل: ${if (o.kind == CashKind.IN) "قبض" else "صرف"} ${o.category} ${money(o.amount, o.currency, currencies)} بتاريخ ${o.date}. " +
+                        "لإنقاص قيد صرف أدخل قيد قبض بالفرق، ولزيادته أدخل قيد صرف بالفرق.",
+                    Brand
+                )
+            }
+            if (!isNew && original?.correctionOf != 0L && original != null) Banner("قيد تصحيحي - السبب: ${original?.reason}", Brand)
             if (!isNew) LockStatus(editable, sheet?.createdAt)
             SectionCard {
                 if (isNew) Choice(
@@ -178,7 +198,12 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
             if (!isNew) SectionCard("المرفقات") {
                 AttachmentsBar(projectId, com.alshihab.fieldledger.data.AttachEntity.CASH, entryId, enabled = original?.voided != true)
             }
+            if (isNew && corOf != 0L) Field("سبب التصحيح *", reason, { reason = it; error = null }, singleLine = false)
             error?.let { Banner(it, Bad) }
+            if (!isNew && !editable && original?.voided == false) OutlinedButton(
+                onClick = { nav.navigate(Routes.cashCorrection(projectId, entryId)) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("الكشف مقفل - إضافة قيد تصحيحي") }
             Button(
                 enabled = editable,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -186,6 +211,7 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
                     val amt = Money.parse(amount)
                     if (amt == null || amt <= 0) { error = "أدخل مبلغاً صحيحاً"; return@Button }
                     if (description.isBlank()) { error = "اكتب البيان"; return@Button }
+                    if (isNew && corOf != 0L && reason.isBlank()) { error = "اكتب سبب التصحيح"; return@Button }
                     val available = balance + (if (original?.kind == CashKind.OUT && original?.currency == currency) original!!.amount else 0L)
                     if (kind == CashKind.OUT && amt > available) confirmOverdraw = true else doSave()
                 }
@@ -242,6 +268,7 @@ fun SettingsScreen(nav: NavController) {
     var bio by remember { mutableStateOf(PinManager.biometricEnabled(ctx)) }
     val bioAvailable = remember { Biometric.available(ctx) }
     var showPin by remember { mutableStateOf(false) }
+    var logoTaps by remember { mutableStateOf(0) }
     var lockTimeout by remember { mutableStateOf(com.alshihab.fieldledger.AppLock.timeoutMs(ctx)) }
     val rooted = remember { DeviceIntegrity.isLikelyRooted() }
     val official = remember { DeviceIntegrity.isOfficialBuild(ctx) }
@@ -289,15 +316,25 @@ fun SettingsScreen(nav: NavController) {
                 KeyValue("سلامة الجهاز", if (rooted) "مكسور الحماية!" else "سليم", if (rooted) Bad else Good)
                 KeyValue("توقيع التطبيق", if (official) "رسمي" else "غير رسمي", if (official) Good else Warn)
             }
-            SectionCard("المكتب") {
-                ListItem(
-                    headlineContent = { Text("إعدادات المكتب") },
-                    supportingContent = { Text("قائمة الأجور اليومية وصلاحيات المحاسب - محمية بكلمة مرور المكتب") },
-                    leadingContent = { Icon(Icons.Filled.Shield, null) },
-                    modifier = Modifier.clickable { nav.navigate(Routes.OFFICE) }
-                )
-            }
             SectionCard("البيانات") {
+                ListItem(
+                    headlineContent = { Text("أسعار الصرف") },
+                    supportingContent = { Text("مثل: 1 USD = 530 YER، مرتبطة بالتاريخ") },
+                    leadingContent = { Icon(Icons.Filled.CurrencyExchange, null) },
+                    modifier = Modifier.clickable { nav.navigate(Routes.FX) }
+                )
+                ListItem(
+                    headlineContent = { Text("التحقق من سلامة الكشوفات") },
+                    supportingContent = { Text("سلسلة البصمات للكشوفات المقفلة") },
+                    leadingContent = { Icon(Icons.Filled.Shield, null) },
+                    modifier = Modifier.clickable { nav.navigate(Routes.INTEGRITY) }
+                )
+                ListItem(
+                    headlineContent = { Text("النسخ الاحتياطي والاستعادة") },
+                    supportingContent = { Text("ملف مشفّر بكلمة مرور يشمل البيانات والمرفقات") },
+                    leadingContent = { Icon(Icons.Filled.Backup, null) },
+                    modifier = Modifier.clickable { nav.navigate(Routes.BACKUP) }
+                )
                 ListItem(
                     headlineContent = { Text("العملات") },
                     leadingContent = { Icon(Icons.Filled.CurrencyExchange, null) },
@@ -315,7 +352,14 @@ fun SettingsScreen(nav: NavController) {
                     androidx.compose.foundation.Image(
                         painter = androidx.compose.ui.res.painterResource(com.alshihab.fieldledger.R.drawable.logo_sh),
                         contentDescription = null,
-                        modifier = Modifier.height(56.dp)
+                        // office settings are reached by tapping the logo 5 times (hidden from field staff)
+                        modifier = Modifier.height(56.dp).clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            logoTaps++
+                            if (logoTaps >= 5) { logoTaps = 0; nav.navigate(Routes.OFFICE) }
+                        }
                     )
                     Column(Modifier.padding(start = 10.dp)) {
                         Text("الدفتر الميداني – الشهاب", fontWeight = FontWeight.Bold)

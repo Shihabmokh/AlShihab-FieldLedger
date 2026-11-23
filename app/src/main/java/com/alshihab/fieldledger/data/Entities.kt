@@ -107,6 +107,8 @@ object Forms {
     const val OFFICE = "OFS"
     const val ISSUE = "31F"
     const val RETURN = "RET"
+    const val SETTLE = "SET"
+    const val CORRECT = "COR"
 }
 
 /** A daily statement (كشف). Editable for 24h after [createdAt], then locked forever. */
@@ -126,6 +128,8 @@ object Status {
     const val HALF = "H"
     const val ABSENT = "A"
     const val CONTRACT = "C"
+    const val SETTLE = "S"      // تصفية حساب
+    const val CORRECTION = "X"  // قيد تصحيحي
 }
 
 @Entity(
@@ -173,7 +177,31 @@ data class CashEntry(
     val docNo: String = "",
     val description: String = "",
     val voided: Boolean = false,
+    val createdAt: Long = 0,
+    /** id of the locked entry this one corrects (0 = normal entry) */
+    @ColumnInfo(defaultValue = "0") val correctionOf: Long = 0,
+    @ColumnInfo(defaultValue = "''") val reason: String = ""
+)
+
+/** Exchange rate effective from [date]: 1 [fromCur] = [rate] [toCur]. Never deleted; a newer date supersedes it. */
+@Entity(tableName = "fx_rates")
+data class FxRate(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val date: String,
+    val fromCur: String,
+    val toCur: String,
+    val rate: Double,
     val createdAt: Long = 0
+)
+
+/** Tamper-evidence: each locked sheet is sealed with SHA-256(content + previous seal). */
+@Entity(tableName = "sheet_seals")
+data class SheetSeal(
+    @PrimaryKey val sheetId: Long,
+    val seq: Long,
+    val prevHash: String,
+    val hash: String,
+    val sealedAt: Long
 )
 
 @Entity(tableName = "audit_log")

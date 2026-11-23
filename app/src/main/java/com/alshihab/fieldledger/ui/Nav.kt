@@ -14,6 +14,9 @@ object Routes {
     const val AUDIT = "audit"
     const val CURRENCIES = "currencies"
     const val OFFICE = "office"
+    const val FX = "fx"
+    const val INTEGRITY = "integrity"
+    const val BACKUP = "backup"
     fun projectForm(id: Long) = "project_form/$id"
     fun workerForm(id: Long) = "worker_form/$id"
     fun project(id: Long) = "project/$id"
@@ -22,6 +25,8 @@ object Routes {
     fun cashForm(projectId: Long, date: String, entryId: Long, kind: String) = "cash_form/$projectId/$date/$entryId/$kind"
     fun statement(assignmentId: Long) = "statement/$assignmentId"
     fun material(materialId: Long) = "material/$materialId"
+    fun settle(projectId: Long, assignmentId: Long = 0) = "settle/$projectId/$assignmentId"
+    fun cashCorrection(projectId: Long, entryId: Long) = "cash_form/$projectId/${com.alshihab.fieldledger.util.Dates.today()}/0/COR$entryId"
     fun stockReport(projectId: Long, kind: String = "M") = "stock20/$projectId/$kind"
 }
 
@@ -38,6 +43,9 @@ fun AppNav() {
         composable(Routes.AUDIT) { AuditScreen(nav) }
         composable(Routes.CURRENCIES) { CurrenciesScreen(nav) }
         composable(Routes.OFFICE) { OfficeScreen(nav) }
+        composable(Routes.FX) { FxScreen(nav) }
+        composable(Routes.INTEGRITY) { IntegrityScreen(nav) }
+        composable(Routes.BACKUP) { BackupScreen(nav) }
         composable("project_form/{id}", listOf(longArg("id"))) {
             ProjectFormScreen(nav, it.arguments?.getLong("id") ?: 0L)
         }
@@ -64,6 +72,9 @@ fun AppNav() {
                 it.arguments?.getLong("eid") ?: 0L,
                 it.arguments?.getString("kind") ?: "OUT"
             )
+        }
+        composable("settle/{pid}/{aid}", listOf(longArg("pid"), longArg("aid"))) {
+            SettlementScreen(nav, it.arguments?.getLong("pid") ?: 0L, it.arguments?.getLong("aid") ?: 0L)
         }
         composable("material/{mid}", listOf(longArg("mid"))) {
             MaterialCardScreen(nav, it.arguments?.getLong("mid") ?: 0L)

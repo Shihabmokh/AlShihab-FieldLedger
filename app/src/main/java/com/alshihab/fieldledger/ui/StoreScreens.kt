@@ -93,7 +93,7 @@ fun StoreTab(nav: NavController, p: Project, currencies: List<CurrencyEntity>) {
                     Icon(Icons.Filled.Add, null); Text(if (isEq) " معدة جديدة" else " صنف جديد")
                 }
                 OutlinedButton(onClick = { nav.navigate(Routes.stockReport(p.id, kind)) }, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.TableChart, null); Text(if (isEq) " كشف المعدات" else " كشف المخزن 20F")
+                    Icon(Icons.Filled.TableChart, null); Text(if (isEq) " كشف المعدات" else " كشف المخزن")
                 }
             }
         }
@@ -291,7 +291,7 @@ fun StockReportScreen(nav: NavController, projectId: Long, kind: String = ItemKi
     var toText by remember(to) { mutableStateOf(to) }
 
     Scaffold(topBar = {
-        AppBar(if (isEq) "كشف توريد وإرجاع معدات العمل" else "كشف حركة المواد في المخزن (20F)", onBack = { nav.popBackStack() }, actions = {
+        AppBar(if (isEq) "كشف توريد وإرجاع معدات العمل" else "كشف حركة المواد في المخزن", onBack = { nav.popBackStack() }, actions = {
             ExportButtons(projectId, if (isEq) ReportKind.EQUIPMENT else ReportKind.STOCK20, from, to)
         })
     }) { pad ->

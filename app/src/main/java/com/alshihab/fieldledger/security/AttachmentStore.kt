@@ -105,8 +105,8 @@ object AttachmentStore {
         return out.toByteArray()
     }
 
-    /** Decrypts to the cache and returns a VIEW intent; verifies the SHA-256 recorded at import. */
-    fun openIntent(c: Context, storedName: String, fileName: String, mime: String, sha256: String): Intent {
+    /** Decrypts an attachment and verifies the SHA-256 recorded at import. */
+    fun decrypt(c: Context, storedName: String, sha256: String): ByteArray {
         val data = File(dir(c), storedName).readBytes()
         val ivLen = data[0].toInt()
         val iv = data.copyOfRange(1, 1 + ivLen)
@@ -115,6 +115,28 @@ object AttachmentStore {
         val plain = cipher.doFinal(data, 1 + ivLen, data.size - 1 - ivLen)
         val sha = MessageDigest.getInstance("SHA-256").digest(plain).joinToString("") { "%02x".format(it) }
         if (sha != sha256) throw SecurityException("بصمة الملف لا تطابق المسجلة - قد يكون الملف عُدّل")
+        return plain
+    }
+
+    /** Encrypts raw bytes under the device key and stores them with the given name (used by restore and signatures). */
+    fun storeBytes(c: Context, storedName: String, bytes: ByteArray) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val enc = cipher.doFinal(bytes)
+        File(dir(c), storedName).outputStream().use { out ->
+            out.write(cipher.iv.size)
+            out.write(cipher.iv)
+            out.write(enc)
+        }
+    }
+
+    fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    fun newStoredName() = UUID.randomUUID().toString() + ".bin"
+
+    /** Decrypts to the cache and returns a VIEW intent; verifies the SHA-256 recorded at import. */
+    fun openIntent(c: Context, storedName: String, fileName: String, mime: String, sha256: String): Intent {
+        val plain = decrypt(c, storedName, sha256)
         val safe = fileName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
         val f = File(viewDir(c), safe)
         f.writeBytes(plain)

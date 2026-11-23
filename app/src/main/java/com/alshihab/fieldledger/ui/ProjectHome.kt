@@ -134,6 +134,16 @@ private fun DashboardTab(nav: NavController, p: Project, currencies: List<Curren
     val todayRows by rememberFlow(p.id, today, initial = emptyList<Attendance>()) { repo.dao.attendanceOn(p.id, today) }
     val assignments by rememberFlow(p.id, initial = emptyList<AssignmentWithWorker>()) { repo.dao.assignments(p.id) }
     val clockOk = remember { TimeGuard.clockOk(ctx) }
+    val totals by rememberFlow(p.id, "tot", initial = emptyList<AssignmentTotal>()) { repo.dao.assignmentTotals(p.id) }
+    val materials by rememberFlow(p.id, "mat", initial = emptyList<com.alshihab.fieldledger.data.Material>()) { repo.dao.materials(p.id) }
+    val stock by rememberFlow(p.id, "stk", initial = emptyList<com.alshihab.fieldledger.data.StockQty>()) { repo.dao.stock(p.id) }
+    val stockMap = stock.associate { it.materialId to it.qty }
+    val low = materials.filter { it.active && it.minQty > 0 && (stockMap[it.id] ?: 0.0) <= it.minQty }
+    val tMap = totals.associateBy { it.assignmentId }
+    val overdrawn = assignments.filter { aw ->
+        val t = tMap[aw.a.id] ?: return@filter false
+        if (aw.a.payType == PayType.CONTRACT) t.withdrawn > aw.a.contractAmount else t.withdrawn > t.due
+    }
     val balance = mergeMinus(mergeMinus(cashNet.toMap(), withdrawn.toMap()), purchases.toMap())
 
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -141,6 +151,13 @@ private fun DashboardTab(nav: NavController, p: Project, currencies: List<Curren
             Banner("ساعة الجهاز أقدم من آخر وقت مسجل. التعديل موقوف حتى تُضبط الساعة بشكل صحيح.", Bad)
         }
         if (!p.active) item { Banner("هذا المشروع موقوف.", Warn) }
+        balance.filter { it.value < 0 }.forEach { (c, v) ->
+            item { Banner("رصيد الصندوق بالسالب (${money(v, c, currencies)}): المدفوعات أكبر من المقبوضات", Bad) }
+        }
+        if (low.isNotEmpty()) item { Banner("أصناف وصلت لحد التنبيه في المخزن: " + low.joinToString("، ") { it.name }) }
+        if (overdrawn.isNotEmpty()) item {
+            Banner("عمال مسحوباتهم أكبر من مستحقاتهم: " + overdrawn.joinToString("، ") { it.worker.name }, Bad)
+        }
         item {
             SectionCard("رصيد الصندوق الحالي") {
                 if (balance.isEmpty()) Text("لا توجد حركة بعد", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -213,6 +230,11 @@ private fun ProjectWorkersTab(nav: NavController, p: Project, currencies: List<C
                 OutlinedButton(onClick = { nav.navigate(Routes.attendance(p.id, Dates.today())) }, modifier = Modifier.weight(1f)) {
                     Text("حركة اليوم")
                 }
+            }
+        }
+        item {
+            OutlinedButton(onClick = { nav.navigate(Routes.settle(p.id)) }, modifier = Modifier.fillMaxWidth()) {
+                Text("تصفية حسابات العمال")
             }
         }
         if (assignments.isEmpty()) item { EmptyState("لم يُضف أي عامل لهذا المشروع بعد") }
@@ -288,7 +310,7 @@ private fun CashTab(
             Text("كشف حركة الصندوق رقم ${sheet!!.serial}", style = MaterialTheme.typography.bodySmall)
         }
         item {
-            SectionCard("كشف حركة الصندوق اليومية (A2-F)") {
+            SectionCard("كشف حركة الصندوق اليومية") {
                 if (codes.isEmpty()) Text("لا توجد حركة", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 codes.forEach { c ->
                     val cName = currencies.firstOrNull { it.code == c }?.name ?: c
@@ -401,7 +423,7 @@ private fun ReportsTab(p: Project, currencies: List<CurrencyEntity>) {
             }
         }
         item {
-            SectionCard("المصروفات الأخرى حسب البند (B2-F)") {
+            SectionCard("المصروفات الأخرى حسب البند") {
                 if (outCats.isEmpty()) Text("لا توجد مصروفات", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 outCats.forEach { KeyValue(it.category, money(it.total, it.currency, currencies)) }
             }
