@@ -13,6 +13,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val AUDIT = "audit"
     const val CURRENCIES = "currencies"
+    const val OFFICE = "office"
     fun projectForm(id: Long) = "project_form/$id"
     fun workerForm(id: Long) = "worker_form/$id"
     fun project(id: Long) = "project/$id"
@@ -21,7 +22,7 @@ object Routes {
     fun cashForm(projectId: Long, date: String, entryId: Long, kind: String) = "cash_form/$projectId/$date/$entryId/$kind"
     fun statement(assignmentId: Long) = "statement/$assignmentId"
     fun material(materialId: Long) = "material/$materialId"
-    fun stockReport(projectId: Long) = "stock20/$projectId"
+    fun stockReport(projectId: Long, kind: String = "M") = "stock20/$projectId/$kind"
 }
 
 @Composable
@@ -36,6 +37,7 @@ fun AppNav() {
         composable(Routes.SETTINGS) { SettingsScreen(nav) }
         composable(Routes.AUDIT) { AuditScreen(nav) }
         composable(Routes.CURRENCIES) { CurrenciesScreen(nav) }
+        composable(Routes.OFFICE) { OfficeScreen(nav) }
         composable("project_form/{id}", listOf(longArg("id"))) {
             ProjectFormScreen(nav, it.arguments?.getLong("id") ?: 0L)
         }
@@ -66,8 +68,8 @@ fun AppNav() {
         composable("material/{mid}", listOf(longArg("mid"))) {
             MaterialCardScreen(nav, it.arguments?.getLong("mid") ?: 0L)
         }
-        composable("stock20/{pid}", listOf(longArg("pid"))) {
-            StockReportScreen(nav, it.arguments?.getLong("pid") ?: 0L)
+        composable("stock20/{pid}/{kind}", listOf(longArg("pid"), strArg("kind"))) {
+            StockReportScreen(nav, it.arguments?.getLong("pid") ?: 0L, it.arguments?.getString("kind") ?: "M")
         }
         composable("statement/{aid}", listOf(longArg("aid"))) {
             WorkerStatementScreen(nav, it.arguments?.getLong("aid") ?: 0L)

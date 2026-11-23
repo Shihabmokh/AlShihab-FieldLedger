@@ -175,6 +175,9 @@ fun CashFormScreen(nav: NavController, projectId: Long, date: String, entryId: L
                 Field("رقم المستند", docNo, { docNo = it }, enabled = editable)
                 Field("البيان / التفاصيل", description, { description = it }, enabled = editable, singleLine = false)
             }
+            if (!isNew) SectionCard("المرفقات") {
+                AttachmentsBar(projectId, com.alshihab.fieldledger.data.AttachEntity.CASH, entryId, enabled = original?.voided != true)
+            }
             error?.let { Banner(it, Bad) }
             Button(
                 enabled = editable,
@@ -285,6 +288,14 @@ fun SettingsScreen(nav: NavController) {
                 KeyValue("حذف البيانات", "ممنوع على مستوى قاعدة البيانات", Good)
                 KeyValue("سلامة الجهاز", if (rooted) "مكسور الحماية!" else "سليم", if (rooted) Bad else Good)
                 KeyValue("توقيع التطبيق", if (official) "رسمي" else "غير رسمي", if (official) Good else Warn)
+            }
+            SectionCard("المكتب") {
+                ListItem(
+                    headlineContent = { Text("إعدادات المكتب") },
+                    supportingContent = { Text("قائمة الأجور اليومية وصلاحيات المحاسب - محمية بكلمة مرور المكتب") },
+                    leadingContent = { Icon(Icons.Filled.Shield, null) },
+                    modifier = Modifier.clickable { nav.navigate(Routes.OFFICE) }
+                )
             }
             SectionCard("البيانات") {
                 ListItem(

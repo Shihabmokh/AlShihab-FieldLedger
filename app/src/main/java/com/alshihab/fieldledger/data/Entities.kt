@@ -90,7 +90,9 @@ data class Assignment(
     val active: Boolean = true,
     val createdAt: Long = 0,
     /** card number, auto-assigned sequentially inside each project */
-    @ColumnInfo(defaultValue = "0") val cardNo: Int = 0
+    @ColumnInfo(defaultValue = "0") val cardNo: Int = 0,
+    /** 0 = wage typed manually; otherwise the office wage-rate it was taken from */
+    @ColumnInfo(defaultValue = "0") val wageRateId: Long = 0
 )
 
 data class AssignmentWithWorker(
@@ -104,6 +106,7 @@ object Forms {
     const val PURCHASE = "4F"
     const val OFFICE = "OFS"
     const val ISSUE = "31F"
+    const val RETURN = "RET"
 }
 
 /** A daily statement (كشف). Editable for 24h after [createdAt], then locked forever. */
@@ -139,9 +142,16 @@ data class Attendance(
     val status: String,
     val overtimeHours: Double = 0.0,
     val due: Long = 0,
+    /** amount withdrawn, converted to the worker's account currency [currency] */
     val withdrawn: Long = 0,
     val workNote: String = "",
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
+    /** currency actually paid out of the cash box (may differ from the account currency) */
+    @ColumnInfo(defaultValue = "''") val payCurrency: String = "",
+    /** amount actually paid, in [payCurrency] */
+    @ColumnInfo(defaultValue = "0") val payAmount: Long = 0,
+    /** 1 unit of payCurrency = rate units of the account currency */
+    @ColumnInfo(defaultValue = "1") val rate: Double = 1.0
 )
 
 object CashKind {
@@ -188,19 +198,30 @@ data class Material(
     val unit: String,
     val minQty: Double = 0.0,
     val active: Boolean = true,
-    val createdAt: Long = 0
+    val createdAt: Long = 0,
+    /** M = مواد (consumed), E = معدات (supplied to site and returned) */
+    @ColumnInfo(defaultValue = "'M'") val kind: String = ItemKind.MATERIAL
 )
+
+object ItemKind {
+    const val MATERIAL = "M"
+    const val EQUIPMENT = "E"
+}
 
 object MoveType {
     const val PURCHASE = "P"  // 4F  مشتراة - تدخل المخزن وتُخصم من الصندوق
     const val OFFICE = "O"    // موردة من المكتب - تدخل المخزن بالكمية فقط
     const val ISSUE = "I"     // 31F منصرفة من المخزن
+    const val RETURN = "R"    // معدات مرتجعة للمكتب
 
     fun form(type: String) = when (type) {
         PURCHASE -> Forms.PURCHASE
         OFFICE -> Forms.OFFICE
+        RETURN -> Forms.RETURN
         else -> Forms.ISSUE
     }
+
+    fun isOut(type: String) = type == ISSUE || type == RETURN
 }
 
 @Entity(
@@ -240,7 +261,50 @@ data class MaterialPeriod(
     val purchased: Double,
     val office: Double,
     val issued: Double,
+    val returned: Double,
     val purchasedValue: Long
+)
+
+/** Daily wage list set by the office (protected by the office password). */
+@Entity(tableName = "wage_rates")
+data class WageRate(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val currency: String,
+    val dailyWage: Long,
+    val overtimeRate: Long = 0,
+    val active: Boolean = true,
+    val createdAt: Long = 0
+)
+
+/** People who are not project workers (receivers, drivers, technicians...). */
+@Entity(tableName = "persons", indices = [Index("projectId")])
+data class Person(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val projectId: Long,
+    val name: String,
+    val phone: String = "",
+    val createdAt: Long = 0
+)
+
+object AttachEntity {
+    const val CASH = "cash"
+    const val MOVE = "move"
+}
+
+/** Encrypted file (invoice photo, transfer notice PDF...) attached to an entry. */
+@Entity(tableName = "attachments", indices = [Index("projectId"), Index(value = ["entity", "entityId"])])
+data class Attachment(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val projectId: Long,
+    val entity: String,
+    val entityId: Long,
+    val fileName: String,
+    val mime: String,
+    val size: Long,
+    val sha256: String,
+    val storedName: String,
+    val createdAt: Long = 0
 )
 
 data class CurrencyTotal(val currency: String, val total: Long)
@@ -252,5 +316,7 @@ data class AssignmentTotal(
     val days: Double,
     val ot: Double
 )
+
+data class AttachmentCount(val entityId: Long, val n: Int)
 
 data class CategoryTotal(val category: String, val currency: String, val total: Long)

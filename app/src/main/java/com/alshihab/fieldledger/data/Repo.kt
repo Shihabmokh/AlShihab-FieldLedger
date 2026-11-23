@@ -122,6 +122,36 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
         }
     }
 
+    // ---------- office wage list ----------
+    suspend fun saveWageRate(w: WageRate): Long = db.withTransaction {
+        if (w.id == 0L) {
+            val id = dao.insertWageRate(w.copy(createdAt = now()))
+            audit("إنشاء", "أجر المكتب", id, "${w.title}: ${Money.fmt(w.dailyWage)} ${w.currency}")
+            id
+        } else {
+            val old = dao.wageRate(w.id)
+            val fixed = w.copy(createdAt = old?.createdAt ?: w.createdAt, currency = old?.currency ?: w.currency)
+            dao.updateWageRate(fixed)
+            val n = dao.applyWageRate(w.id, fixed.dailyWage, fixed.overtimeRate)
+            audit("تعديل", "أجر المكتب", w.id, "${diff(old, fixed)} - طُبّق على $n عامل")
+            w.id
+        }
+    }
+
+    // ---------- persons ----------
+    suspend fun addPerson(p: Person): Long = db.withTransaction {
+        val id = dao.insertPerson(p.copy(createdAt = now()))
+        audit("إنشاء", "شخص", id, "${p.name} ${p.phone}")
+        id
+    }
+
+    // ---------- attachments ----------
+    suspend fun addAttachment(a: Attachment): Long = db.withTransaction {
+        val id = dao.insertAttachment(a.copy(createdAt = now()))
+        audit("إرفاق", if (a.entity == AttachEntity.CASH) "قيد صندوق" else "حركة مواد", a.entityId, "${a.fileName} (${a.size / 1024} KB) sha256:${a.sha256.take(16)}")
+        id
+    }
+
     private suspend fun movesInner(projectId: Long, date: String, type: String, moves: List<MaterialMove>) {
         val form = MoveType.form(type)
         val existingSheet = dao.findSheet(projectId, form, date)
@@ -154,7 +184,7 @@ class Repo(private val db: LedgerDb, private val ctx: Context) {
     }
 
     private fun describeMove(m: MaterialMove) =
-        "${when (m.type) { MoveType.PURCHASE -> "شراء"; MoveType.OFFICE -> "توريد من المكتب"; else -> "صرف" }} " +
+        "${when (m.type) { MoveType.PURCHASE -> "شراء"; MoveType.OFFICE -> "توريد من المكتب"; MoveType.RETURN -> "إرجاع للمكتب"; else -> "صرف" }} " +
             "صنف ${m.materialId} كمية ${m.qty}" + if (m.type == MoveType.PURCHASE) " بقيمة ${Money.fmt(m.total)} ${m.currency}" else ""
 
     private suspend fun attendanceInner(projectId: Long, date: String, rows: List<Attendance>) {

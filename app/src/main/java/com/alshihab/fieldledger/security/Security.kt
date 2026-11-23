@@ -71,12 +71,16 @@ object DbKeyManager {
     }
 }
 
-/** App PIN: salted PBKDF2 hash, constant-time compare, escalating lockout after failures. */
-object PinManager {
-    private const val PREFS = "pin_meta"
-    private const val ITER = 60_000
-    const val MIN_LEN = 4
-    const val MAX_LEN = 8
+/** App PIN (and the separate office password): salted PBKDF2 hash, constant-time compare, escalating lockout. */
+val PinManager = PinStore("pin_meta")
+
+/** Office password: protects the wage list and office-only settings from the field accountant. */
+val OfficePin = PinStore("office_meta")
+
+class PinStore(private val PREFS: String) {
+    private val ITER = 60_000
+    val MIN_LEN = 4
+    val MAX_LEN = 8
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -132,6 +136,20 @@ object PinManager {
 
     fun biometricEnabled(c: Context) = prefs(c).getBoolean("bio", false)
     fun setBiometric(c: Context, on: Boolean) = prefs(c).edit().putBoolean("bio", on).apply()
+}
+
+/** Rules the office sets for field accountants. */
+object OfficePolicy {
+    private fun prefs(c: Context) = c.getSharedPreferences("office_policy", Context.MODE_PRIVATE)
+    fun allowManualWage(c: Context) = prefs(c).getBoolean("manual_wage", true)
+    fun setAllowManualWage(c: Context, on: Boolean) = prefs(c).edit().putBoolean("manual_wage", on).apply()
+
+    /** last exchange rate used for a currency pair, to pre-fill the next entry */
+    fun lastRate(c: Context, from: String, to: String): Double? =
+        prefs(c).getString("rate_${from}_$to", null)?.toDoubleOrNull()
+
+    fun saveRate(c: Context, from: String, to: String, rate: Double) =
+        prefs(c).edit().putString("rate_${from}_$to", rate.toString()).apply()
 }
 
 /**

@@ -66,6 +66,9 @@ import com.alshihab.fieldledger.data.LockedException
 import com.alshihab.fieldledger.data.Material
 import com.alshihab.fieldledger.data.MaterialMove
 import com.alshihab.fieldledger.data.MoveType
+import com.alshihab.fieldledger.data.ItemKind
+import com.alshihab.fieldledger.data.AttachEntity
+import com.alshihab.fieldledger.security.OfficePolicy
 import com.alshihab.fieldledger.data.StockException
 import com.alshihab.fieldledger.data.StockQty
 import com.alshihab.fieldledger.data.PayType
@@ -121,7 +124,8 @@ private data class MoveDraft(
     val site: String,
     val person: String,
     val details: String,
-    val voided: Boolean
+    val voided: Boolean,
+    val itemKind: String = ItemKind.MATERIAL
 ) {
     val qtyValue: Double get() = parseDecimal(qty) ?: 0.0
     val totalValue: Long get() = Math.round(qtyValue * (Money.parse(unitPrice) ?: 0L))
@@ -140,7 +144,8 @@ private data class MoveDraft(
     companion object {
         fun of(m: MaterialMove) = MoveDraft(
             m.id, m, m.type, m.materialId, fmtNum(m.qty), Money.toInput(m.unitPrice), m.currency,
-            m.shop, m.docNo, m.site, m.person, m.details, m.voided
+            m.shop, m.docNo, m.site, m.person, m.details, m.voided,
+            if (m.type == MoveType.RETURN) ItemKind.EQUIPMENT else ItemKind.MATERIAL
         )
     }
 }
@@ -169,6 +174,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
     val purchaseSheet by rememberFlow<Sheet?>(projectId, "4$date", initial = null) { repo.dao.sheetFlow(projectId, Forms.PURCHASE, date) }
     val officeSheet by rememberFlow<Sheet?>(projectId, "o$date", initial = null) { repo.dao.sheetFlow(projectId, Forms.OFFICE, date) }
     val issueSheet by rememberFlow<Sheet?>(projectId, "i$date", initial = null) { repo.dao.sheetFlow(projectId, Forms.ISSUE, date) }
+    val returnSheet by rememberFlow<Sheet?>(projectId, "r$date", initial = null) { repo.dao.sheetFlow(projectId, Forms.RETURN, date) }
     val moves = remember { mutableStateListOf<MoveDraft>() }
     var newMaterialFor by remember { mutableStateOf<Long?>(null) }
     val rows = remember { mutableStateMapOf<Long, RowState>() }
@@ -187,18 +193,22 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
         val existing = if (ws != null) repo.dao.attendanceForSheet(ws.id) else emptyList()
         rows.clear()
         existing.forEach {
+            val paidCur = it.payCurrency.ifBlank { it.currency }
             rows[it.assignmentId] = RowState(
                 status = it.status,
                 ot = if (it.overtimeHours == 0.0) "" else fmtNum(it.overtimeHours),
-                withdrawn = Money.toInput(it.withdrawn),
-                note = it.workNote
+                withdrawn = Money.toInput(if (it.payCurrency.isBlank()) it.withdrawn else it.payAmount),
+                note = it.workNote,
+                payCurrency = paidCur,
+                rate = if (paidCur == it.currency) "" else fmtNum(it.rate)
             )
         }
         savedIds = existing.map { it.assignmentId }.toSet()
         cash.clear()
         cash.addAll(repo.dao.cashOnList(projectId, date).map { CashDraft.of(it) })
         moves.clear()
-        moves.addAll(repo.dao.movesOnList(projectId, date).map { MoveDraft.of(it) })
+        val kinds = repo.dao.materialsList(projectId).associate { it.id to it.kind }
+        moves.addAll(repo.dao.movesOnList(projectId, date).map { MoveDraft.of(it).copy(itemKind = kinds[it.materialId] ?: ItemKind.MATERIAL) })
         error = null
         loadedFor = date
     }
@@ -209,9 +219,11 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
     val purchaseEditable = remember(purchaseSheet, loadedFor) { repo.sheetEditable(purchaseSheet) } && loaded
     val officeEditable = remember(officeSheet, loadedFor) { repo.sheetEditable(officeSheet) } && loaded
     val issueEditable = remember(issueSheet, loadedFor) { repo.sheetEditable(issueSheet) } && loaded
+    val returnEditable = remember(returnSheet, loadedFor) { repo.sheetEditable(returnSheet) } && loaded
     fun moveEditable(type: String) = when (type) {
         MoveType.PURCHASE -> purchaseEditable
         MoveType.OFFICE -> officeEditable
+        MoveType.RETURN -> returnEditable
         else -> issueEditable
     }
     val stockMap = stock.associate { it.materialId to it.qty }
@@ -227,7 +239,8 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
         val r = rowOf(aw)
         val c = aw.a.currency
         dueToday[c] = (dueToday[c] ?: 0L) + computeDue(aw.a, r)
-        wToday[c] = (wToday[c] ?: 0L) + (Money.parse(r.withdrawn) ?: 0L)
+        val pc = r.payCur(aw.a)
+        wToday[pc] = (wToday[pc] ?: 0L) + (Money.parse(r.withdrawn) ?: 0L)
         if (r.status == Status.PRESENT) present += 1.0
         if (r.status == Status.HALF) present += 0.5
     }
@@ -262,10 +275,11 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
     }
 
     fun addMove(type: String) {
+        val kind = if (type == MoveType.RETURN) ItemKind.EQUIPMENT else ItemKind.MATERIAL
         moves.add(
             MoveDraft(
-                key = newKey, original = null, type = type,
-                materialId = materials.firstOrNull { it.active }?.id ?: 0L,
+                key = newKey, original = null, type = type, itemKind = kind,
+                materialId = materials.firstOrNull { it.active && it.kind == kind }?.id ?: 0L,
                 qty = "", unitPrice = "", currency = baseCurrency, shop = "", docNo = "",
                 site = project?.site ?: "", person = "", details = "", voided = false
             )
@@ -279,6 +293,8 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
             Money.parse(r.withdrawn) == null || parseDecimal(r.ot) == null || (parseDecimal(r.ot) ?: 0.0) < 0
         }
         if (workEditable && badRow != null) { error = "قيمة غير صحيحة في سطر العامل ${badRow.worker.name}"; return }
+        val badRate = shown.firstOrNull { aw -> rowOf(aw).accountWithdrawn(aw.a) == null }
+        if (workEditable && badRate != null) { error = "أدخل سعر الصرف لمسحوب العامل ${badRate.worker.name}"; return }
         val badCash = cash.firstOrNull { !it.voided && it.original == null && (Money.parse(it.amount) ?: 0L) <= 0L && it.description.isNotBlank() }
             ?: cash.firstOrNull { !it.voided && it.original != null && (Money.parse(it.amount) ?: 0L) <= 0L }
         if (cashEditable && badCash != null) { error = "أدخل مبلغ القيد: ${badCash.category}"; return }
@@ -304,12 +320,20 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 status = if (aw.a.payType == PayType.CONTRACT) Status.CONTRACT else r.status,
                 overtimeHours = if (r.status == Status.ABSENT) 0.0 else (parseDecimal(r.ot) ?: 0.0),
                 due = computeDue(aw.a, r),
-                withdrawn = Money.parse(r.withdrawn) ?: 0L,
+                withdrawn = r.accountWithdrawn(aw.a) ?: 0L,
+                payCurrency = r.payCur(aw.a),
+                payAmount = Money.parse(r.withdrawn) ?: 0L,
+                rate = if (r.payCur(aw.a) == aw.a.currency) 1.0 else (parseDecimal(r.rate) ?: 1.0),
                 workNote = r.note.trim()
             )
         }
         val cashEntries = if (!cashEditable) null else cash.map { it.toEntry(projectId, date) }
-        val moveMap = listOf(MoveType.PURCHASE, MoveType.OFFICE, MoveType.ISSUE)
+        if (workEditable) shown.forEach { aw ->
+            val r = rowOf(aw)
+            val pc = r.payCur(aw.a)
+            if (pc != aw.a.currency) parseDecimal(r.rate)?.takeIf { it > 0 }?.let { OfficePolicy.saveRate(ctx, pc, aw.a.currency, it) }
+        }
+        val moveMap = listOf(MoveType.PURCHASE, MoveType.OFFICE, MoveType.ISSUE, MoveType.RETURN)
             .filter { moveEditable(it) }
             .associateWith { t -> moves.filter { it.type == t && it.materialId != 0L }.map { it.toMove(projectId, date) } }
             .filterValues { it.isNotEmpty() }
@@ -360,7 +384,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                     }
                     error?.let { Text(it, color = Bad) }
                     Button(
-                        enabled = (workEditable || cashEditable || purchaseEditable || officeEditable || issueEditable) && !saving,
+                        enabled = (workEditable || cashEditable || purchaseEditable || officeEditable || issueEditable || returnEditable) && !saving,
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                         onClick = { save() }
                     ) { Text(if (saving) "جارٍ الحفظ…" else "حفظ حركة اليوم") }
@@ -415,7 +439,13 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 EmptyState("لا يوجد عمال نشطون. أضفهم من تبويب العمال في صفحة المشروع.")
             }
             if (loaded && workersOpen) items(shown, key = { "w" + it.a.id }) { aw ->
-                WorkerDayCard(aw, rowOf(aw), currencies, workEditable) { rows[aw.a.id] = it }
+                WorkerDayCard(aw, rowOf(aw), currencies, workEditable) { nr ->
+                    val old = rowOf(aw)
+                    val pc = nr.payCur(aw.a)
+                    rows[aw.a.id] = if (pc != old.payCur(aw.a) && pc != aw.a.currency && nr.rate.isBlank())
+                        nr.copy(rate = OfficePolicy.lastRate(ctx, pc, aw.a.currency)?.let { fmtNum(it) } ?: "")
+                    else nr
+                }
             }
 
             // ================= receipts =================
@@ -424,7 +454,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
             }
             if (loaded && cashSheet != null) item { LockStatus(cashEditable, cashSheet?.createdAt) }
             if (loaded) items(cash.filter { it.kind == CashKind.IN }, key = { "c" + it.key }) { d ->
-                CashDraftCard(d, currencies, cashEditable,
+                CashDraftCard(projectId, d, currencies, cashEditable,
                     onChange = { nd -> val i = cash.indexOfFirst { it.key == d.key }; if (i >= 0) cash[i] = nd },
                     onRemove = { cash.removeAll { it.key == d.key } })
             }
@@ -439,7 +469,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                 SectionHeader("المصروفات الأخرى (B2-F)", "${cash.count { it.kind == CashKind.OUT && !it.voided }} قيد", null, null)
             }
             if (loaded) items(cash.filter { it.kind == CashKind.OUT }, key = { "c" + it.key }) { d ->
-                CashDraftCard(d, currencies, cashEditable,
+                CashDraftCard(projectId, d, currencies, cashEditable,
                     onChange = { nd -> val i = cash.indexOfFirst { it.key == d.key }; if (i >= 0) cash[i] = nd },
                     onRemove = { cash.removeAll { it.key == d.key } })
             }
@@ -450,33 +480,33 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
             }
 
             if (loaded) item {
-                SectionHeader("مشتريات المواد (4F)", "${moves.count { it.type == MoveType.PURCHASE && !it.voided }} سطر", null, null)
+                SectionHeader("المشتريات - مواد / معدات (4F)", "${moves.count { it.type == MoveType.PURCHASE && !it.voided }} سطر", null, null)
             }
             if (loaded && purchaseSheet != null) item { LockStatus(moveEditable(MoveType.PURCHASE), purchaseSheet?.createdAt) }
             if (loaded) items(moves.filter { it.type == MoveType.PURCHASE }, key = { "m" + it.key }) { d ->
-                MoveDraftCard(d, materials, stockMap, currencies, moveEditable(d.type),
+                MoveDraftCard(projectId, d, materials, stockMap, currencies, assignments, moveEditable(d.type),
                     onChange = { nd -> val i = moves.indexOfFirst { it.key == d.key }; if (i >= 0) moves[i] = nd },
                     onRemove = { moves.removeAll { it.key == d.key } },
                     onNewMaterial = { newMaterialFor = d.key })
             }
             if (loaded) item {
                 OutlinedButton(onClick = { addMove(MoveType.PURCHASE) }, enabled = moveEditable(MoveType.PURCHASE), modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.Add, null); Text(" إضافة مادة مشتراة")
+                    Icon(Icons.Filled.Add, null); Text(" إضافة مشتريات")
                 }
             }
             if (loaded) item {
-                SectionHeader("مواد موردة من المكتب", "${moves.count { it.type == MoveType.OFFICE && !it.voided }} سطر", null, null)
+                SectionHeader("توريد مواد / معدات من المكتب", "${moves.count { it.type == MoveType.OFFICE && !it.voided }} سطر", null, null)
             }
             if (loaded && officeSheet != null) item { LockStatus(moveEditable(MoveType.OFFICE), officeSheet?.createdAt) }
             if (loaded) items(moves.filter { it.type == MoveType.OFFICE }, key = { "m" + it.key }) { d ->
-                MoveDraftCard(d, materials, stockMap, currencies, moveEditable(d.type),
+                MoveDraftCard(projectId, d, materials, stockMap, currencies, assignments, moveEditable(d.type),
                     onChange = { nd -> val i = moves.indexOfFirst { it.key == d.key }; if (i >= 0) moves[i] = nd },
                     onRemove = { moves.removeAll { it.key == d.key } },
                     onNewMaterial = { newMaterialFor = d.key })
             }
             if (loaded) item {
                 OutlinedButton(onClick = { addMove(MoveType.OFFICE) }, enabled = moveEditable(MoveType.OFFICE), modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.Add, null); Text(" إضافة مادة موردة")
+                    Icon(Icons.Filled.Add, null); Text(" إضافة توريد")
                 }
             }
             if (loaded) item {
@@ -484,7 +514,7 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
             }
             if (loaded && issueSheet != null) item { LockStatus(moveEditable(MoveType.ISSUE), issueSheet?.createdAt) }
             if (loaded) items(moves.filter { it.type == MoveType.ISSUE }, key = { "m" + it.key }) { d ->
-                MoveDraftCard(d, materials, stockMap, currencies, moveEditable(d.type),
+                MoveDraftCard(projectId, d, materials, stockMap, currencies, assignments, moveEditable(d.type),
                     onChange = { nd -> val i = moves.indexOfFirst { it.key == d.key }; if (i >= 0) moves[i] = nd },
                     onRemove = { moves.removeAll { it.key == d.key } },
                     onNewMaterial = { newMaterialFor = d.key })
@@ -494,12 +524,28 @@ fun DayEntryScreen(nav: NavController, projectId: Long, initialDate: String) {
                     Icon(Icons.Filled.Add, null); Text(" إضافة مادة منصرفة")
                 }
             }
+            if (loaded) item {
+                SectionHeader("معدات مرتجعة للمكتب", "${moves.count { it.type == MoveType.RETURN && !it.voided }} سطر", null, null)
+            }
+            if (loaded && returnSheet != null) item { LockStatus(moveEditable(MoveType.RETURN), returnSheet?.createdAt) }
+            if (loaded) items(moves.filter { it.type == MoveType.RETURN }, key = { "m" + it.key }) { d ->
+                MoveDraftCard(projectId, d, materials, stockMap, currencies, assignments, moveEditable(d.type),
+                    onChange = { nd -> val i = moves.indexOfFirst { it.key == d.key }; if (i >= 0) moves[i] = nd },
+                    onRemove = { moves.removeAll { it.key == d.key } },
+                    onNewMaterial = { newMaterialFor = d.key })
+            }
+            if (loaded) item {
+                OutlinedButton(onClick = { addMove(MoveType.RETURN) }, enabled = moveEditable(MoveType.RETURN), modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Text(" إضافة معدة مرتجعة")
+                }
+            }
             item { Spacer(Modifier.height(16.dp)) }
         }
     }
 
     newMaterialFor?.let { key ->
-        MaterialDialog(projectId, null) { id ->
+        val kindFor = moves.firstOrNull { it.key == key }?.itemKind ?: ItemKind.MATERIAL
+        MaterialDialog(projectId, null, defaultKind = kindFor) { id ->
             if (id != null) {
                 val i = moves.indexOfFirst { it.key == key }
                 if (i >= 0) moves[i] = moves[i].copy(materialId = id)
@@ -537,6 +583,7 @@ private fun WorkerDayCard(
 ) {
     val a = aw.a
     val due = computeDue(a, r)
+    val pc = r.payCur(a)
     SectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -554,21 +601,35 @@ private fun WorkerDayCard(
                 listOf(Status.PRESENT to "حاضر", Status.HALF to "نصف يوم", Status.ABSENT to "غائب"),
                 r.status, { onChange(r.copy(status = it)) }, enabled = editable
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Field(
-                    "ساعات إضافية", r.ot, { onChange(r.copy(ot = it)) },
-                    modifier = Modifier.weight(0.8f), keyboard = KeyboardType.Decimal,
-                    enabled = editable && r.status != Status.ABSENT
-                )
-                MoneyField(
-                    "المسحوب", r.withdrawn, { onChange(r.copy(withdrawn = it)) }, a.currency, currencies,
-                    modifier = Modifier.weight(1.2f), enabled = editable, showWords = false
-                )
-            }
-        } else {
+            Field(
+                "ساعات إضافية", r.ot, { onChange(r.copy(ot = it)) },
+                keyboard = KeyboardType.Decimal, enabled = editable && r.status != Status.ABSENT
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MoneyField(
-                "دفعة من المقاولة", r.withdrawn, { onChange(r.copy(withdrawn = it)) }, a.currency, currencies,
-                enabled = editable, showWords = false
+                if (a.payType == PayType.DAILY) "المسحوب" else "دفعة من المقاولة",
+                r.withdrawn, { onChange(r.copy(withdrawn = it)) }, pc, currencies,
+                modifier = Modifier.weight(1.3f), enabled = editable, showWords = false
+            )
+            DropdownField(
+                "عملة الدفع", currencies, currencies.firstOrNull { it.code == pc },
+                { it.code }, { onChange(r.copy(payCurrency = it.code, rate = if (it.code == a.currency) "" else r.rate)) },
+                modifier = Modifier.weight(0.9f), enabled = editable
+            )
+        }
+        if (pc != a.currency) {
+            Field(
+                "سعر الصرف: 1 $pc = ؟ ${a.currency}", r.rate, { onChange(r.copy(rate = it)) },
+                keyboard = KeyboardType.Decimal, enabled = editable,
+                isError = (Money.parse(r.withdrawn) ?: 0L) > 0 && (parseDecimal(r.rate) ?: 0.0) <= 0.0
+            )
+            val conv = r.accountWithdrawn(a)
+            Text(
+                if (conv != null) "يُخصم من حساب العامل: ${money(conv, a.currency, currencies)}  •  ويُخصم من الصندوق: ${money(Money.parse(r.withdrawn) ?: 0L, pc, currencies)}"
+                else "أدخل سعر الصرف لتحويل المسحوب إلى عملة حساب العامل (${a.currency})",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (conv != null) Brand else Bad
             )
         }
         Field("بيان الأعمال المنفذة", r.note, { onChange(r.copy(note = it)) }, enabled = editable, singleLine = false)
@@ -577,6 +638,7 @@ private fun WorkerDayCard(
 
 @Composable
 private fun CashDraftCard(
+    projectId: Long,
     d: CashDraft,
     currencies: List<CurrencyEntity>,
     editable: Boolean,
@@ -630,23 +692,28 @@ private fun CashDraftCard(
             Field("رقمه", d.docNo, { onChange(d.copy(docNo = it)) }, modifier = Modifier.weight(0.8f), enabled = enabled)
         }
         Field("البيان", d.description, { onChange(d.copy(description = it)) }, enabled = enabled, singleLine = false)
+        AttachmentsBar(projectId, AttachEntity.CASH, d.original?.id ?: 0L, enabled = !d.voided)
     }
 }
 
 @Composable
 private fun MoveDraftCard(
+    projectId: Long,
     d: MoveDraft,
     materials: List<Material>,
     stock: Map<Long, Double>,
     currencies: List<CurrencyEntity>,
+    workers: List<AssignmentWithWorker>,
     editable: Boolean,
     onChange: (MoveDraft) -> Unit,
     onRemove: () -> Unit,
     onNewMaterial: () -> Unit
 ) {
+    val isEq = d.itemKind == ItemKind.EQUIPMENT
     val (label, color) = when (d.type) {
-        MoveType.PURCHASE -> "شراء" to Good
-        MoveType.OFFICE -> "توريد من المكتب" to Accent
+        MoveType.PURCHASE -> (if (isEq) "شراء معدات" else "شراء مواد") to Good
+        MoveType.OFFICE -> (if (isEq) "توريد معدات من المكتب" else "توريد مواد من المكتب") to Accent
+        MoveType.RETURN -> "إرجاع معدات للمكتب" to Warn
         else -> "صرف من المخزن" to Bad
     }
     val mat = materials.firstOrNull { it.id == d.materialId }
@@ -673,18 +740,24 @@ private fun MoveDraftCard(
             }
         }
         if (d.voided) Banner(if (d.original?.voided == true) "حركة ملغاة" else "ستُلغى هذه الحركة عند الحفظ", Bad)
+        if (d.type == MoveType.PURCHASE || d.type == MoveType.OFFICE) Choice(
+            listOf(ItemKind.MATERIAL to "مواد", ItemKind.EQUIPMENT to "معدات"), d.itemKind,
+            { k -> onChange(d.copy(itemKind = k, materialId = materials.firstOrNull { it.active && it.kind == k }?.id ?: 0L)) },
+            enabled = enabled && d.original == null
+        )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             DropdownField(
-                "الصنف", materials.filter { it.active || it.id == d.materialId }, mat,
+                if (isEq) "المعدة" else "الصنف",
+                materials.filter { (it.active && it.kind == d.itemKind) || it.id == d.materialId }, mat,
                 { "${it.name} (${it.unit})" }, { onChange(d.copy(materialId = it.id)) },
                 modifier = Modifier.weight(1f), enabled = enabled
             )
             if (enabled) IconButton(onClick = onNewMaterial) { Icon(Icons.Filled.Add, contentDescription = "صنف جديد") }
         }
         if (mat != null) Text(
-            "الرصيد الحالي في المخزن: ${fmtNum(stock[mat.id] ?: 0.0)} ${mat.unit}",
+            (if (isEq) "الموجود في الموقع: " else "الرصيد الحالي في المخزن: ") + "${fmtNum(stock[mat.id] ?: 0.0)} ${mat.unit}",
             style = MaterialTheme.typography.bodySmall,
-            color = if (d.type == MoveType.ISSUE && (parseDecimal(d.qty) ?: 0.0) > (stock[mat.id] ?: 0.0) + (if (d.original != null && !d.original.voided) d.original.qty else 0.0)) Bad
+            color = if (MoveType.isOut(d.type) && (parseDecimal(d.qty) ?: 0.0) > (stock[mat.id] ?: 0.0) + (if (d.original != null && !d.original.voided) d.original.qty else 0.0)) Bad
             else MaterialTheme.colorScheme.onSurfaceVariant
         )
         when (d.type) {
@@ -716,16 +789,29 @@ private fun MoveDraftCard(
                     Field("الكمية", d.qty, { onChange(d.copy(qty = it)) }, modifier = Modifier.weight(0.8f), keyboard = KeyboardType.Decimal, enabled = enabled)
                     Field("رقم سند التوريد", d.docNo, { onChange(d.copy(docNo = it)) }, modifier = Modifier.weight(1f), enabled = enabled)
                 }
-                Field("المستلم", d.person, { onChange(d.copy(person = it)) }, enabled = enabled)
+                PersonField("المستلم", d.person, { onChange(d.copy(person = it)) }, projectId, workers, enabled = enabled)
+            }
+            MoveType.RETURN -> {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Field("الكمية", d.qty, { onChange(d.copy(qty = it)) }, modifier = Modifier.weight(0.8f), keyboard = KeyboardType.Decimal, enabled = enabled)
+                    Field("رقم سند الإرجاع", d.docNo, { onChange(d.copy(docNo = it)) }, modifier = Modifier.weight(1f), enabled = enabled)
+                }
+                PersonField("المسلِّم / الناقل", d.person, { onChange(d.copy(person = it)) }, projectId, workers, enabled = enabled)
             }
             else -> {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Field("الكمية", d.qty, { onChange(d.copy(qty = it)) }, modifier = Modifier.weight(0.8f), keyboard = KeyboardType.Decimal, enabled = enabled)
                     Field("موقع العمل", d.site, { onChange(d.copy(site = it)) }, modifier = Modifier.weight(1.2f), enabled = enabled)
                 }
-                Field("القائم بالعمل", d.person, { onChange(d.copy(person = it)) }, enabled = enabled)
+                PersonField("القائم بالعمل", d.person, { onChange(d.copy(person = it)) }, projectId, workers, enabled = enabled)
             }
         }
-        Field(if (d.type == MoveType.ISSUE) "تفاصيل العمل" else "ملاحظات", d.details, { onChange(d.copy(details = it)) }, enabled = enabled, singleLine = false)
+        Field(
+            when (d.type) { MoveType.ISSUE -> "تفاصيل العمل"; MoveType.RETURN -> "حالة المعدة / ملاحظات"; else -> "ملاحظات" },
+            d.details, { onChange(d.copy(details = it)) }, enabled = enabled, singleLine = false
+        )
+        if (d.type == MoveType.PURCHASE || d.type == MoveType.OFFICE) {
+            AttachmentsBar(projectId, AttachEntity.MOVE, d.original?.id ?: 0L, enabled = !d.voided)
+        }
     }
 }

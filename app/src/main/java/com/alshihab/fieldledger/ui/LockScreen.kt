@@ -153,7 +153,7 @@ fun LockScreen(activity: FragmentActivity) {
             )
             Spacer(Modifier.height(12.dp))
             Text("الدفتر الميداني – الشهاب", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Brand)
-            Text("مكتب الشهاب للمقاولات العامة", fontSize = 13.sp, color = Accent)
+            Text("مكتب الشهاب للمقاولات العامة", fontSize = 13.sp, color = BrandGray)
             Spacer(Modifier.height(8.dp))
             Text(title, textAlign = TextAlign.Center)
             Spacer(Modifier.height(16.dp))

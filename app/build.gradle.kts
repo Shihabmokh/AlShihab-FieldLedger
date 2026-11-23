@@ -94,4 +94,6 @@ dependencies {
     implementation("androidx.sqlite:sqlite-ktx:2.4.0")
 
     implementation("androidx.biometric:biometric:1.1.0")
+
+    implementation("com.google.zxing:core:3.5.3")
 }

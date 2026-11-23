@@ -13,9 +13,9 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     entities = [
         Project::class, CurrencyEntity::class, ExchangeRate::class, Worker::class,
         Assignment::class, Sheet::class, Attendance::class, CashEntry::class, AuditLog::class,
-        Material::class, MaterialMove::class
+        Material::class, MaterialMove::class, WageRate::class, Person::class, Attachment::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class LedgerDb : RoomDatabase() {
@@ -26,14 +26,14 @@ abstract class LedgerDb : RoomDatabase() {
         private val NO_DELETE = listOf(
             "projects", "workers", "assignments", "sheets",
             "attendance", "cash_entries", "audit_log", "currencies",
-            "materials", "material_moves"
+            "materials", "material_moves", "wage_rates", "persons", "attachments"
         )
 
         fun build(ctx: Context): LedgerDb {
             val passphrase = DbKeyManager.getPassphrase(ctx)
             return Room.databaseBuilder(ctx, LedgerDb::class.java, "ledger.db")
                 .openHelperFactory(SupportOpenHelperFactory(passphrase))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         db.execSQL(
@@ -90,6 +90,36 @@ abstract class LedgerDb : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_material_moves_sheetId` ON `material_moves` (`sheetId`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_material_moves_projectId` ON `material_moves` (`projectId`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_material_moves_materialId` ON `material_moves` (`materialId`)")
+            }
+        }
+
+        /** v4: equipment, multi-currency worker withdrawals, office wage list, persons, attachments */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE materials ADD COLUMN kind TEXT NOT NULL DEFAULT 'M'")
+                db.execSQL("ALTER TABLE assignments ADD COLUMN wageRateId INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE attendance ADD COLUMN payCurrency TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE attendance ADD COLUMN payAmount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE attendance ADD COLUMN rate REAL NOT NULL DEFAULT 1")
+                db.execSQL("UPDATE attendance SET payCurrency = currency, payAmount = withdrawn, rate = 1")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `wage_rates` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`title` TEXT NOT NULL, `currency` TEXT NOT NULL, `dailyWage` INTEGER NOT NULL, " +
+                        "`overtimeRate` INTEGER NOT NULL, `active` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `persons` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`projectId` INTEGER NOT NULL, `name` TEXT NOT NULL, `phone` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_persons_projectId` ON `persons` (`projectId`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `attachments` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`projectId` INTEGER NOT NULL, `entity` TEXT NOT NULL, `entityId` INTEGER NOT NULL, " +
+                        "`fileName` TEXT NOT NULL, `mime` TEXT NOT NULL, `size` INTEGER NOT NULL, `sha256` TEXT NOT NULL, " +
+                        "`storedName` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_projectId` ON `attachments` (`projectId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_entity_entityId` ON `attachments` (`entity`, `entityId`)")
             }
         }
 

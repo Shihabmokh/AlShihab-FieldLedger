@@ -350,6 +350,7 @@ private fun CashTab(
 private fun ReportsTab(p: Project, currencies: List<CurrencyEntity>) {
     val repo = Graph.repo
     val due by rememberFlow(p.id, initial = emptyList<CurrencyTotal>()) { repo.dao.dueTotals(p.id) }
+    val accW by rememberFlow(p.id, "accw", initial = emptyList<CurrencyTotal>()) { repo.dao.accountWithdrawTotals(p.id) }
     val withdrawn by rememberFlow(p.id, initial = emptyList<CurrencyTotal>()) { repo.dao.withdrawTotals(p.id) }
     val outCats by rememberFlow(p.id, CashKind.OUT, initial = emptyList<CategoryTotal>()) { repo.dao.categoryTotals(p.id, CashKind.OUT) }
     val inCats by rememberFlow(p.id, CashKind.IN, initial = emptyList<CategoryTotal>()) { repo.dao.categoryTotals(p.id, CashKind.IN) }
@@ -362,9 +363,7 @@ private fun ReportsTab(p: Project, currencies: List<CurrencyEntity>) {
     val codes = (receipts.keys + expenses.keys + w.keys + pu.keys).sorted()
 
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
-            Banner("تصدير PDF و Excel والكشوفات الأسبوعية (5F، 7F، 8F، 24T، 25T) ستُضاف في المرحلة الثالثة. كشف المخزن 20F في تبويب المخزن.", Brand)
-        }
+        item { ReportsExportCard(p) }
         item {
             SectionCard("النشاط المالي التراكمي للمشروع") {
                 if (codes.isEmpty()) Text("لا توجد حركة بعد", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -385,8 +384,9 @@ private fun ReportsTab(p: Project, currencies: List<CurrencyEntity>) {
             }
         }
         item {
-            SectionCard("مستحقات العمال (اليومية)") {
+            SectionCard("مستحقات العمال (بعملة حساب كل عامل)") {
                 val d = due.toMap()
+                val w = accW.toMap()
                 val keys = (d.keys + w.keys).sorted()
                 if (keys.isEmpty()) Text("لا توجد بيانات", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 keys.forEach { c ->

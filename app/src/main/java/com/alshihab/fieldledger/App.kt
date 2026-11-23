@@ -31,5 +31,6 @@ class App : Application() {
         super.onCreate()
         System.loadLibrary("sqlcipher")
         Graph.init(this)
+        com.alshihab.fieldledger.security.AttachmentStore.cleanCache(this)
     }
 }

@@ -82,6 +82,10 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
     val workers by rememberFlow(Unit, initial = emptyList<Worker>()) { repo.dao.workers() }
     val assigned by rememberFlow(projectId, initial = emptyList<AssignmentWithWorker>()) { repo.dao.assignments(projectId) }
     val currencies by rememberFlow(Unit, initial = emptyList<CurrencyEntity>()) { repo.dao.currencies() }
+    val wageRates by rememberFlow("rates", initial = emptyList<com.alshihab.fieldledger.data.WageRate>()) { repo.dao.wageRates() }
+    val manualAllowed = remember { com.alshihab.fieldledger.security.OfficePolicy.allowManualWage(ctx) }
+    var rateId by rememberSaveable { mutableStateOf(0L) }
+    var wageFromList by rememberSaveable { mutableStateOf(!manualAllowed) }
 
     var loaded by remember { mutableStateOf(false) }
     var original by remember { mutableStateOf<Assignment?>(null) }
@@ -110,6 +114,7 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
                 baseHours = a.baseHours.toString(); contractDesc = a.contractDesc
                 contractAmount = Money.toInput(a.contractAmount)
                 progress = if (a.progress == 0) "" else a.progress.toString(); active = a.active
+                rateId = a.wageRateId; wageFromList = a.wageRateId != 0L || !manualAllowed
             }
         }
         loaded = true
@@ -144,13 +149,38 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
             }
             SectionCard("طريقة الأجر") {
                 Choice(listOf(PayType.DAILY to "يومية", PayType.CONTRACT to "مقاولة"), payType, { payType = it })
+                val fromList = payType == PayType.DAILY && wageFromList
+                if (payType == PayType.DAILY) {
+                    Text("مصدر الأجر اليومي", style = MaterialTheme.typography.bodySmall)
+                    Choice(
+                        listOf("LIST" to "من قائمة أجور المكتب", "MANUAL" to "إدخال يدوي"),
+                        if (wageFromList) "LIST" else "MANUAL",
+                        { if (it == "LIST") wageFromList = true else if (manualAllowed) { wageFromList = false; rateId = 0L } }
+                    )
+                    if (!manualAllowed) Text(
+                        "الإدخال اليدوي للأجر غير مسموح من المكتب. اختر من قائمة الأجور.",
+                        style = MaterialTheme.typography.bodySmall, color = Bad
+                    )
+                }
+                if (fromList) {
+                    val activeRates = wageRates.filter { it.active || it.id == rateId }
+                    if (activeRates.isEmpty()) Banner("لم يحدد المكتب قائمة الأجور بعد (الإعدادات ← إعدادات المكتب)", Bad)
+                    DropdownField(
+                        "الأجر حسب قائمة المكتب *", activeRates, activeRates.firstOrNull { it.id == rateId },
+                        { "${it.title} - ${money(it.dailyWage, it.currency, currencies)}" },
+                        { r ->
+                            rateId = r.id; currency = r.currency
+                            wage = Money.toInput(r.dailyWage); otRate = Money.toInput(r.overtimeRate)
+                        }
+                    )
+                }
                 DropdownField(
-                    "العملة", currencies, currencies.firstOrNull { it.code == currency },
-                    { currencyLabel(it) }, { currency = it.code }
+                    "عملة حساب العامل", currencies, currencies.firstOrNull { it.code == currency },
+                    { currencyLabel(it) }, { currency = it.code }, enabled = !fromList
                 )
                 if (payType == PayType.DAILY) {
-                    MoneyField("الأجر اليومي *", wage, { wage = it }, currency, currencies)
-                    MoneyField("سعر الساعة الإضافية", otRate, { otRate = it }, currency, currencies)
+                    MoneyField("الأجر اليومي *", wage, { wage = it }, currency, currencies, enabled = !fromList)
+                    MoneyField("سعر الساعة الإضافية", otRate, { otRate = it }, currency, currencies, enabled = !fromList)
                     Field("ساعات العمل الأساسية في اليوم", baseHours, { baseHours = it }, keyboard = KeyboardType.Number)
                 } else {
                     Field("وصف العمل المتفق عليه", contractDesc, { contractDesc = it }, singleLine = false)
@@ -177,6 +207,8 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
                     val prog = com.alshihab.fieldledger.util.normalizeDigits(progress).trim().ifEmpty { "0" }.toIntOrNull()
                     error = when {
                         workerId == 0L -> "اختر العامل"
+                        payType == PayType.DAILY && wageFromList && rateId == 0L -> "اختر الأجر من قائمة المكتب"
+                        payType == PayType.DAILY && !wageFromList && !manualAllowed -> "الإدخال اليدوي غير مسموح"
                         payType == PayType.DAILY && (w == null || w <= 0) -> "أدخل أجراً يومياً صحيحاً"
                         payType == PayType.DAILY && ot == null -> "سعر الساعة الإضافية غير صحيح"
                         payType == PayType.DAILY && (hours == null || hours !in 1..24) -> "ساعات العمل غير صحيحة"
@@ -193,7 +225,8 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
                         baseHours = hours ?: 8,
                         contractDesc = contractDesc.trim(),
                         contractAmount = if (payType == PayType.CONTRACT) ca!! else 0L,
-                        progress = prog!!, active = active
+                        progress = prog!!, active = active,
+                        wageRateId = if (payType == PayType.DAILY && wageFromList) rateId else 0L
                     )
                     scope.launch {
                         try {
@@ -216,9 +249,25 @@ fun AssignmentFormScreen(nav: NavController, projectId: Long, assignmentId: Long
 internal data class RowState(
     val status: String,
     val ot: String = "",
+    /** amount paid, in [payCurrency] */
     val withdrawn: String = "",
-    val note: String = ""
+    val note: String = "",
+    /** currency paid from the cash box; blank = the worker's account currency */
+    val payCurrency: String = "",
+    /** 1 unit of payCurrency = rate units of the account currency */
+    val rate: String = ""
 )
+
+internal fun RowState.payCur(a: Assignment) = payCurrency.ifBlank { a.currency }
+
+/** withdrawal converted to the worker's account currency; null if the rate is missing/invalid */
+internal fun RowState.accountWithdrawn(a: Assignment): Long? {
+    val paid = Money.parse(withdrawn) ?: return null
+    if (payCur(a) == a.currency || paid == 0L) return paid
+    val r = parseDecimal(rate) ?: return null
+    if (r <= 0.0) return null
+    return Math.round(paid * r)
+}
 
 internal fun defaultRow(a: Assignment) =
     RowState(if (a.payType == PayType.CONTRACT) Status.CONTRACT else Status.ABSENT)
@@ -269,6 +318,7 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
             IconButton(onClick = { nav.navigate(Routes.assign(a.projectId, a.id)) }) {
                 Icon(Icons.Filled.EditNote, contentDescription = "تعديل الاتفاق")
             }
+            ExportButtons(a.projectId, com.alshihab.fieldledger.report.ReportKind.STATEMENT, "", "", a.id)
         })
     }) { pad ->
         LazyColumn(
@@ -337,6 +387,8 @@ fun WorkerStatementScreen(nav: NavController, assignmentId: Long) {
                     }
                     if (!contract) KeyValue("المستحق", money(r.due, c, currencies) + if (r.overtimeHours > 0) "  (+${fmtNum(r.overtimeHours)} س)" else "")
                     KeyValue("المسحوب", money(r.withdrawn, c, currencies))
+                    if (r.payCurrency.isNotBlank() && r.payCurrency != c && r.payAmount != 0L)
+                        Text("دُفع ${money(r.payAmount, r.payCurrency, currencies)} بسعر صرف ${fmtNum(r.rate)}", style = MaterialTheme.typography.bodySmall)
                     KeyValue(if (contract) "المتبقي من المقاولة" else "الرصيد التراكمي", money(if (contract) a.contractAmount + bal else bal, c, currencies), bold = true)
                     if (r.workNote.isNotBlank()) Text(r.workNote, style = MaterialTheme.typography.bodySmall)
                 }

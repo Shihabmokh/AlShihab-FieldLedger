@@ -106,14 +106,19 @@ interface LedgerDao {
     )
     fun assignmentTotals(projectId: Long): Flow<List<AssignmentTotal>>
 
-    @Query("SELECT currency, SUM(withdrawn) AS total FROM attendance WHERE projectId = :projectId GROUP BY currency")
+    /** cash paid to workers, in the currency actually paid (cash-box side) */
+    @Query("SELECT payCurrency AS currency, SUM(payAmount) AS total FROM attendance WHERE projectId = :projectId AND payAmount != 0 GROUP BY payCurrency")
     fun withdrawTotals(projectId: Long): Flow<List<CurrencyTotal>>
 
-    @Query("SELECT currency, SUM(withdrawn) AS total FROM attendance WHERE projectId = :projectId AND date < :date GROUP BY currency")
+    @Query("SELECT payCurrency AS currency, SUM(payAmount) AS total FROM attendance WHERE projectId = :projectId AND payAmount != 0 AND date < :date GROUP BY payCurrency")
     fun withdrawTotalsBefore(projectId: Long, date: String): Flow<List<CurrencyTotal>>
 
-    @Query("SELECT currency, SUM(withdrawn) AS total FROM attendance WHERE projectId = :projectId AND date = :date GROUP BY currency")
+    @Query("SELECT payCurrency AS currency, SUM(payAmount) AS total FROM attendance WHERE projectId = :projectId AND payAmount != 0 AND date = :date GROUP BY payCurrency")
     fun withdrawTotalsOn(projectId: Long, date: String): Flow<List<CurrencyTotal>>
+
+    /** withdrawals converted to each worker's account currency (worker-account side) */
+    @Query("SELECT currency, SUM(withdrawn) AS total FROM attendance WHERE projectId = :projectId GROUP BY currency")
+    fun accountWithdrawTotals(projectId: Long): Flow<List<CurrencyTotal>>
 
     @Query("SELECT currency, SUM(due) AS total FROM attendance WHERE projectId = :projectId GROUP BY currency")
     fun dueTotals(projectId: Long): Flow<List<CurrencyTotal>>
@@ -169,13 +174,13 @@ interface LedgerDao {
     suspend fun updateMaterial(m: Material)
 
     @Query(
-        "SELECT materialId, SUM(CASE WHEN type = 'I' THEN -qty ELSE qty END) AS qty " +
+        "SELECT materialId, SUM(CASE WHEN type IN ('I', 'R') THEN -qty ELSE qty END) AS qty " +
             "FROM material_moves WHERE projectId = :projectId AND voided = 0 GROUP BY materialId"
     )
     fun stock(projectId: Long): Flow<List<StockQty>>
 
     @Query(
-        "SELECT materialId, SUM(CASE WHEN type = 'I' THEN -qty ELSE qty END) AS qty " +
+        "SELECT materialId, SUM(CASE WHEN type IN ('I', 'R') THEN -qty ELSE qty END) AS qty " +
             "FROM material_moves WHERE projectId = :projectId AND voided = 0 GROUP BY materialId"
     )
     suspend fun stockNow(projectId: Long): List<StockQty>
@@ -215,14 +220,80 @@ interface LedgerDao {
 
     @Query(
         "SELECT materialId, " +
-            "SUM(CASE WHEN date < :from THEN (CASE WHEN type = 'I' THEN -qty ELSE qty END) ELSE 0 END) AS opening, " +
+            "SUM(CASE WHEN date < :from THEN (CASE WHEN type IN ('I', 'R') THEN -qty ELSE qty END) ELSE 0 END) AS opening, " +
             "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'P' THEN qty ELSE 0 END) AS purchased, " +
             "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'O' THEN qty ELSE 0 END) AS office, " +
             "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'I' THEN qty ELSE 0 END) AS issued, " +
+            "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'R' THEN qty ELSE 0 END) AS returned, " +
             "SUM(CASE WHEN date >= :from AND date <= :to AND type = 'P' THEN total ELSE 0 END) AS purchasedValue " +
             "FROM material_moves WHERE projectId = :projectId AND voided = 0 AND date <= :to GROUP BY materialId"
     )
     fun stockPeriod(projectId: Long, from: String, to: String): Flow<List<MaterialPeriod>>
+
+    // ---------- office wage list ----------
+    @Query("SELECT * FROM wage_rates ORDER BY active DESC, title")
+    fun wageRates(): Flow<List<WageRate>>
+
+    @Query("SELECT * FROM wage_rates WHERE id = :id")
+    suspend fun wageRate(id: Long): WageRate?
+
+    @Insert
+    suspend fun insertWageRate(w: WageRate): Long
+
+    @Update
+    suspend fun updateWageRate(w: WageRate)
+
+    @Query("UPDATE assignments SET dailyWage = :wage, overtimeRate = :ot WHERE wageRateId = :rateId")
+    suspend fun applyWageRate(rateId: Long, wage: Long, ot: Long): Int
+
+    // ---------- persons ----------
+    @Query("SELECT * FROM persons WHERE projectId = :projectId ORDER BY name")
+    fun persons(projectId: Long): Flow<List<Person>>
+
+    @Insert
+    suspend fun insertPerson(p: Person): Long
+
+    // ---------- attachments ----------
+    @Query("SELECT * FROM attachments WHERE entity = :entity AND entityId = :entityId ORDER BY id")
+    fun attachments(entity: String, entityId: Long): Flow<List<Attachment>>
+
+    @Query("SELECT entityId, COUNT(*) AS n FROM attachments WHERE projectId = :projectId AND entity = :entity GROUP BY entityId")
+    fun attachmentCounts(projectId: Long, entity: String): Flow<List<AttachmentCount>>
+
+    @Insert
+    suspend fun insertAttachment(a: Attachment): Long
+
+    // ---------- reporting (one-shot reads) ----------
+    @Query("SELECT * FROM attendance WHERE projectId = :projectId AND date >= :from AND date <= :to ORDER BY date")
+    suspend fun attendanceBetween(projectId: Long, from: String, to: String): List<Attendance>
+
+    @Query("SELECT * FROM cash_entries WHERE projectId = :projectId AND date >= :from AND date <= :to ORDER BY date, id")
+    suspend fun cashBetween(projectId: Long, from: String, to: String): List<CashEntry>
+
+    @Query("SELECT * FROM material_moves WHERE projectId = :projectId AND date >= :from AND date <= :to ORDER BY date, id")
+    suspend fun movesBetween(projectId: Long, from: String, to: String): List<MaterialMove>
+
+    @Query("SELECT * FROM material_moves WHERE projectId = :projectId AND date < :date AND voided = 0")
+    suspend fun movesBefore(projectId: Long, date: String): List<MaterialMove>
+
+    @Query("SELECT * FROM cash_entries WHERE projectId = :projectId AND date < :date AND voided = 0")
+    suspend fun cashBefore(projectId: Long, date: String): List<CashEntry>
+
+    @Query("SELECT * FROM attendance WHERE projectId = :projectId AND date < :date")
+    suspend fun attendanceBefore(projectId: Long, date: String): List<Attendance>
+
+    @Transaction
+    @Query("SELECT * FROM assignments WHERE projectId = :projectId ORDER BY cardNo, id")
+    suspend fun assignmentsList(projectId: Long): List<AssignmentWithWorker>
+
+    @Query("SELECT * FROM materials WHERE projectId = :projectId ORDER BY name")
+    suspend fun materialsList(projectId: Long): List<Material>
+
+    @Query("SELECT * FROM currencies ORDER BY code")
+    suspend fun currenciesList(): List<CurrencyEntity>
+
+    @Query("SELECT * FROM attendance WHERE assignmentId = :assignmentId ORDER BY date")
+    suspend fun attendanceForAssignmentList(assignmentId: Long): List<Attendance>
 
     // ---------- audit ----------
     @Insert
